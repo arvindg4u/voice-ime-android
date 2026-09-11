@@ -12,6 +12,7 @@ import android.os.Looper
 import android.text.InputType
 import android.util.Log
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.LinearLayout
@@ -89,7 +90,13 @@ class VoiceImeService : InputMethodService() {
     }
 
     override fun onCreateInputView(): View {
-        rootView?.let { return it }
+        // System may re-add the cached view on configuration change
+        // (resetStateForNewConfiguration → setInputView); a view that
+        // still has a parent crashes with "child already has a parent".
+        rootView?.let {
+            (it.parent as? ViewGroup)?.removeView(it)
+            return it
+        }
         return try {
             val view = inflateInputView()
             fallbackMode = false
