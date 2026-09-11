@@ -193,8 +193,6 @@ class VoiceImeService : InputMethodService() {
                 }
             } catch (e: TranscribeException) {
                 failure = e.message ?: getString(R.string.ime_error_network)
-            } finally {
-                lastWav = null
             }
             if (transcript != null) {
                 deliverTranscript(transcript)
@@ -224,7 +222,6 @@ class VoiceImeService : InputMethodService() {
                 failure = e.message ?: getString(R.string.ime_error_network)
             }
             if (transcript != null) {
-                lastWav = null
                 deliverTranscript(transcript)
             } else {
                 showError(failure ?: getString(R.string.ime_error_network))
@@ -237,6 +234,7 @@ class VoiceImeService : InputMethodService() {
             showError(getString(R.string.ime_error_empty))
             return
         }
+        lastWav = null
         // Clipboard first so the text survives even if commit fails.
         try {
             val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
