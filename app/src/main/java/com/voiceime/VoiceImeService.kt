@@ -54,6 +54,7 @@ class VoiceImeService : InputMethodService() {
     private var lastWav: ByteArray? = null
     private var passwordArmed = false
     private var passwordField = false
+    private var keyCursor: Int = 0
 
     private lateinit var settings: SettingsStore
     private val llm = LlmClient()
@@ -129,7 +130,7 @@ class VoiceImeService : InputMethodService() {
             startActivity(intent)
             return
         }
-        if (settings.apiKey.isEmpty()) {
+        if (settings.apiKeys.isEmpty()) {
             showError(getString(R.string.ime_error_no_key))
             return
         }
@@ -173,8 +174,8 @@ class VoiceImeService : InputMethodService() {
         renderState()
         statusText?.setText(R.string.ime_status_recording)
         startTimer()
-        // 60 s hard cap in addition to the recorder's own auto-stop.
-        mainHandler.postDelayed({ if (state == State.RECORDING) finishRecording(upload = true) }, 60_000)
+        // 5 min hard cap in addition to the recorder's own auto-stop.
+        mainHandler.postDelayed({ if (state == State.RECORDING) finishRecording(upload = true) }, 300_000)
     }
 
     private fun finishRecording(upload: Boolean) {
@@ -210,19 +211,27 @@ class VoiceImeService : InputMethodService() {
         renderState()
         statusText?.setText(R.string.ime_status_uploading)
         val baseUrl = settings.baseUrl
-        val apiKey = settings.apiKey
+        val apiKeys = settings.apiKeys
         val model = settings.model
+        val start = keyCursor
         transcribeJob = serviceScope.launch {
             var transcript: String? = null
+            var usedIndex: Int? = null
             var failure: String? = null
             try {
-                transcript = withContext(Dispatchers.IO) {
-                    llm.transcribe(wav, baseUrl, apiKey, model)
+                val result = withContext(Dispatchers.IO) {
+                    llm.transcribe(wav, apiKeys, baseUrl, model, start)
                 }
+                transcript = result.first
+                usedIndex = result.second
             } catch (e: TranscribeException) {
                 failure = e.message ?: getString(R.string.ime_error_network)
             }
             if (transcript != null) {
+                val used = usedIndex
+                if (apiKeys.isNotEmpty() && used != null) {
+                    keyCursor = (used + 1) % apiKeys.size
+                }
                 deliverTranscript(transcript)
             } else {
                 showError(failure ?: getString(R.string.ime_error_network))
@@ -237,19 +246,27 @@ class VoiceImeService : InputMethodService() {
         renderState()
         statusText?.setText(R.string.ime_status_uploading)
         val baseUrl = settings.baseUrl
-        val apiKey = settings.apiKey
+        val apiKeys = settings.apiKeys
         val model = settings.model
+        val start = keyCursor
         transcribeJob = serviceScope.launch {
             var transcript: String? = null
+            var usedIndex: Int? = null
             var failure: String? = null
             try {
-                transcript = withContext(Dispatchers.IO) {
-                    llm.transcribe(wav, baseUrl, apiKey, model)
+                val result = withContext(Dispatchers.IO) {
+                    llm.transcribe(wav, apiKeys, baseUrl, model, start)
                 }
+                transcript = result.first
+                usedIndex = result.second
             } catch (e: TranscribeException) {
                 failure = e.message ?: getString(R.string.ime_error_network)
             }
             if (transcript != null) {
+                val used = usedIndex
+                if (apiKeys.isNotEmpty() && used != null) {
+                    keyCursor = (used + 1) % apiKeys.size
+                }
                 deliverTranscript(transcript)
             } else {
                 showError(failure ?: getString(R.string.ime_error_network))

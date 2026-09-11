@@ -5,14 +5,12 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-/** Encrypted settings storage for base URL, API key, and model. */
+/** Encrypted settings storage for base URL, API keys (one per line), and model. */
 class SettingsStore(context: Context) {
 
     companion object {
-        const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
-        const val DEFAULT_MODEL = "gpt-audio-1.5"
-        const val GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-        const val DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+        const val DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+        const val DEFAULT_MODEL = "gemini-2.5-flash"
 
         private const val PREFS_NAME = "voice_ime_settings"
         private const val KEY_BASE_URL = "base_url"
@@ -36,10 +34,18 @@ class SettingsStore(context: Context) {
             prefs.edit().putString(KEY_BASE_URL, normalizeBaseUrl(value)).apply()
         }
 
-    var apiKey: String
+    /**
+     * API keys, one per line in the stored string. The SAME pref key holds the
+     * raw text, so migration from the old single-key value is automatic: it is
+     * just a one-line list.
+     */
+    var apiKeys: List<String>
         get() = prefs.getString(KEY_API_KEY, "").orEmpty()
+            .split("\n")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
         set(value) {
-            prefs.edit().putString(KEY_API_KEY, value).apply()
+            prefs.edit().putString(KEY_API_KEY, value.joinToString("\n")).apply()
         }
 
     var model: String
@@ -49,7 +55,7 @@ class SettingsStore(context: Context) {
             prefs.edit().putString(KEY_MODEL, value.ifEmpty { DEFAULT_MODEL }).apply()
         }
 
-    /** Trim trailing slashes and a trailing "/chat/completions"; empty falls back to default. */
+    /** Trim trailing slashes and legacy "/chat/completions"; empty falls back to default. */
     fun normalizeBaseUrl(raw: String): String {
         var url = raw.trim()
         if (url.isEmpty()) return DEFAULT_BASE_URL

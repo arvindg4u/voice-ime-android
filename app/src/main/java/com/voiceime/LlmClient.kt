@@ -1,6 +1,5 @@
 package com.voiceime
 
-import android.util.Base64
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -15,59 +14,89 @@ import java.util.concurrent.TimeUnit
 class TranscribeException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /**
- * Sends WAV audio to {baseUrl}/chat/completions as base64 input_audio
- * and returns the transcript from choices[0].
- * The API key is never logged.
+ * Sends WAV audio to the Gemini generateContent endpoint as base64 inline
+ * audio and returns the transcript joined from all candidates' parts.
+ * Key rotation lives here: keys are tried in round-robin order from
+ * [startIndex]; on HTTP 429 the next key is tried. Non-429 errors fail
+ * immediately. The API keys are never logged.
  */
 class LlmClient {
 
     private val http: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .writeTimeout(90, TimeUnit.SECONDS)
         .build()
 
     @Volatile
     private var inFlight: Call? = null
 
+    /**
+     * Transcribes [wav] with the first working key. Returns the transcript
+     * plus the index of the key that worked, so the caller can advance its
+     * cursor to (usedIndex + 1) % n for even spread.
+     */
     @Throws(TranscribeException::class)
-    fun transcribe(wav: ByteArray, baseUrl: String, apiKey: String, model: String): String {
-        if (isGeminiBaseUrl(baseUrl)) return transcribeGemini(wav, baseUrl, apiKey, model)
-        val url = baseUrl.trimEnd('/') + "/chat/completions"
-        val audioB64 = Base64.encodeToString(wav, Base64.NO_WRAP)
+    fun transcribe(
+        wav: ByteArray,
+        apiKeys: List<String>,
+        baseUrl: String,
+        model: String,
+        startIndex: Int = 0,
+    ): Pair<String, Int> {
+        val keys = normalizeKeys(apiKeys)
+        if (keys.isEmpty()) throw TranscribeException("No API key — open Settings")
+        val audioB64 = java.util.Base64.getEncoder().encodeToString(wav)
 
-        val body = buildRequestJson(model, audioB64)
+        val body = buildGeminiRequestJson(audioB64)
+        val url = geminiUrl(baseUrl, model)
         val host = try { java.net.URL(baseUrl).host } catch (e: Exception) { baseUrl }
-        debugLog("transcribe", "POST url=$host model=$model wavBytes=${wav.size} b64Len=${audioB64.length}")
+        debugLog(
+            "transcribe",
+            "POST url=$host model=$model wavBytes=${wav.size} b64Len=${audioB64.length} " +
+                "keys=${keys.size} start=$startIndex",
+        )
 
-        val request = Request.Builder()
-            .url(url)
-            .addHeader("Authorization", "Bearer $apiKey")
-            .post(body.toRequestBody("application/json".toMediaType()))
-            .build()
+        val start = ((startIndex % keys.size) + keys.size) % keys.size
+        for (i in keys.indices) {
+            val idx = (start + i) % keys.size
+            val request = Request.Builder()
+                .url(url)
+                .addHeader("x-goog-api-key", keys[idx])
+                .post(body.toRequestBody("application/json".toMediaType()))
+                .build()
 
-        val call = http.newCall(request)
-        inFlight = call
-        try {
-            val response = call.execute()
-            response.use { res ->
-                val payload = res.body?.string().orEmpty()
-                debugLog("transcribe", "HTTP ${res.code} payload=${payload.take(2000)}")
-                if (!res.isSuccessful) {
-                    throw TranscribeException(mapHttpError(res.code, payload))
+            val call = http.newCall(request)
+            inFlight = call
+            val code: Int
+            val payload: String
+            try {
+                val response = call.execute()
+                response.use { res ->
+                    code = res.code
+                    payload = res.body?.string().orEmpty()
                 }
-                return parseTranscript(payload)
+            } catch (e: IOException) {
+                if (call.isCanceled()) throw TranscribeException("cancelled", e)
+                throw TranscribeException("Network error — check connection", e)
+            } catch (e: Exception) {
+                throw TranscribeException("Transcription failed", e)
+            } finally {
+                if (inFlight === call) inFlight = null
             }
-        } catch (e: TranscribeException) {
-            throw e
-        } catch (e: IOException) {
-            if (call.isCanceled()) throw TranscribeException("cancelled", e)
-            throw TranscribeException("Network error — check connection", e)
-        } catch (e: Exception) {
-            throw TranscribeException("Transcription failed", e)
-        } finally {
-            if (inFlight === call) inFlight = null
+            debugLog("transcribe", "HTTP $code key=$idx payload=${payload.take(2000)}")
+            if (code == 429) {
+                if (i == keys.lastIndex) {
+                    throw TranscribeException("Rate limited on all keys — retry later")
+                }
+                continue
+            }
+            if (code < 200 || code >= 300) {
+                throw TranscribeException(mapHttpError(code, payload))
+            }
+            return Pair(parseGeminiTranscript(payload), idx)
         }
+        throw TranscribeException("Rate limited on all keys — retry later")
     }
 
     /** Cancels the in-flight transcription request, if any. */
@@ -80,72 +109,9 @@ class LlmClient {
         android.util.Log.d("VoiceIme", "$tag: $msg")
     }
 
-    /** Builds the exact POST body for a chat-completions audio transcription request. */
-    internal fun buildRequestJson(model: String, audioB64: String): String =
-        JSONObject()
-            .put("model", model)
-            .put(
-                "messages",
-                JSONArray().put(
-                    JSONObject()
-                        .put("role", "user")
-                        .put(
-                            "content",
-                            JSONArray()
-                                .put(
-                                    JSONObject()
-                                        .put("type", "text")
-                                        .put(
-                                            "text",
-                                            "Transcribe the speech exactly. " +
-                                                "Output only the transcript, no commentary.",
-                                        ),
-                                )
-                                .put(
-                                    JSONObject()
-                                        .put("type", "input_audio")
-                                        .put(
-                                            "input_audio",
-                                            JSONObject()
-                                                .put("data", audioB64)
-                                                .put("format", "wav"),
-                                        ),
-                                ),
-                        ),
-                ),
-            )
-            .toString()
-
-    /**
-     * Extracts the transcript from a chat-completions response payload.
-     * Reads message.content first; falls back to message.audio.transcript.
-     */
-    @Throws(TranscribeException::class)
-    internal fun parseTranscript(payload: String): String {
-        val message = JSONObject(payload)
-            .optJSONArray("choices")
-            ?.optJSONObject(0)
-            ?.optJSONObject("message")
-        val text = message?.optString("content").orEmpty().trim()
-        if (text.isNotEmpty()) return text
-        val transcript = message
-            ?.optJSONObject("audio")
-            ?.optString("transcript")
-            .orEmpty()
-            .trim()
-        if (transcript.isEmpty()) throw TranscribeException("empty")
-        return transcript
-    }
-
-    /** True when the base URL points at the Google Generative Language API (case-insensitive). */
-    internal fun isGeminiBaseUrl(baseUrl: String): Boolean {
-        val host = try {
-            java.net.URL(baseUrl).host
-        } catch (e: Exception) {
-            baseUrl
-        }
-        return host.contains("generativelanguage.googleapis.com", ignoreCase = true)
-    }
+    /** Trims, drops blanks, and dedupes keys, keeping the original order. */
+    internal fun normalizeKeys(apiKeys: List<String>): List<String> =
+        apiKeys.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
 
     /** Builds the Gemini generateContent body: WAV audio as inline data plus a text instruction. */
     internal fun buildGeminiRequestJson(audioB64: String): String =
@@ -184,50 +150,6 @@ class LlmClient {
         baseUrl.trimEnd('/') + "/models/$model:generateContent"
 
     /**
-     * Sends WAV audio to the Gemini generateContent endpoint with an x-goog-api-key
-     * header and returns the transcript joined from all candidates' parts.
-     * The API key and audio are never logged.
-     */
-    @Throws(TranscribeException::class)
-    internal fun transcribeGemini(wav: ByteArray, baseUrl: String, apiKey: String, model: String): String {
-        val url = geminiUrl(baseUrl, model)
-        val audioB64 = Base64.encodeToString(wav, Base64.NO_WRAP)
-
-        val body = buildGeminiRequestJson(audioB64)
-        val host = try { java.net.URL(baseUrl).host } catch (e: Exception) { baseUrl }
-        debugLog("transcribeGemini", "POST url=$host model=$model wavBytes=${wav.size} b64Len=${audioB64.length}")
-
-        val request = Request.Builder()
-            .url(url)
-            .addHeader("x-goog-api-key", apiKey)
-            .post(body.toRequestBody("application/json".toMediaType()))
-            .build()
-
-        val call = http.newCall(request)
-        inFlight = call
-        try {
-            val response = call.execute()
-            response.use { res ->
-                val payload = res.body?.string().orEmpty()
-                debugLog("transcribeGemini", "HTTP ${res.code} payload=${payload.take(2000)}")
-                if (!res.isSuccessful) {
-                    throw TranscribeException(mapHttpError(res.code, payload))
-                }
-                return parseGeminiTranscript(payload)
-            }
-        } catch (e: TranscribeException) {
-            throw e
-        } catch (e: IOException) {
-            if (call.isCanceled()) throw TranscribeException("cancelled", e)
-            throw TranscribeException("Network error — check connection", e)
-        } catch (e: Exception) {
-            throw TranscribeException("Transcription failed", e)
-        } finally {
-            if (inFlight === call) inFlight = null
-        }
-    }
-
-    /**
      * Joins the text of every part of every candidate in a generateContent response.
      * Throws TranscribeException("empty") when nothing was returned.
      */
@@ -254,13 +176,11 @@ class LlmClient {
         return text
     }
 
-    private fun mapHttpError(code: Int): String = mapHttpError(code, "")
-
     /** Maps an HTTP status to a user-safe message, appending server detail when present. */
     internal fun mapHttpError(code: Int, body: String): String {
         val base = when (code) {
             401 -> "Check API key in settings"
-            404, 405 -> "Server does not support audio input — check base URL/model"
+            404, 405 -> "Model not found or no access — check model"
             429 -> "Rate limited — retry"
             else -> "Server error (HTTP $code)"
         }

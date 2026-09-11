@@ -13,7 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Edits base URL, API key, and model. API key never leaves this screen except real transcribe. */
+/** Edits base URL, API keys (one per line), and model. Keys never leave this screen except real transcribe. */
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var settings: SettingsStore
@@ -33,7 +33,7 @@ class SettingsActivity : AppCompatActivity() {
         modelField = findViewById(R.id.settingsModel)
 
         baseUrlField.setText(settings.baseUrl)
-        apiKeyField.setText(settings.apiKey)
+        apiKeyField.setText(settings.apiKeys.joinToString("\n"))
         modelField.setText(settings.model)
 
         findViewById<Button>(R.id.settingsSave).setOnClickListener { save() }
@@ -45,7 +45,8 @@ class SettingsActivity : AppCompatActivity() {
 
     private fun save() {
         settings.baseUrl = baseUrlField.text?.toString().orEmpty()
-        settings.apiKey = apiKeyField.text?.toString().orEmpty()
+        settings.apiKeys = apiKeyField.text?.toString().orEmpty()
+            .split("\n").map { line -> line.trim() }.filter { line -> line.isNotEmpty() }
         settings.model = modelField.text?.toString().orEmpty()
         baseUrlField.setText(settings.baseUrl)
         modelField.setText(settings.model)
@@ -53,15 +54,17 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     /**
-     * Sends a 1 s 440 Hz test tone to the configured model and shows the
-     * transcript (first 100 chars) or the exact error text.
+     * Sends a 1 s 440 Hz test tone to the configured model, trying keys in
+     * order, and shows the transcript (first 100 chars, with "key i/n") or
+     * the exact error text.
      * Runs off the main thread; the button is re-enabled in all paths.
      */
     private fun test() {
         val testButton = findViewById<Button>(R.id.settingsTest)
-        val key = apiKeyField.text?.toString().orEmpty()
+        val keys = apiKeyField.text?.toString().orEmpty()
+            .split("\n").map { it.trim() }.filter { it.isNotEmpty() }
         val url = baseUrlField.text?.toString().orEmpty()
-        if (key.isEmpty() || url.isEmpty()) {
+        if (keys.isEmpty() || url.isEmpty()) {
             Toast.makeText(this, R.string.settings_missing_key, Toast.LENGTH_SHORT).show()
             return
         }
@@ -69,10 +72,10 @@ class SettingsActivity : AppCompatActivity() {
         testButton.isEnabled = false
         lifecycleScope.launch {
             val message = try {
-                val transcript = withContext(Dispatchers.IO) {
-                    llm.transcribe(AudioRecorder.testToneWav(), url, key, model)
+                val (transcript, usedIndex) = withContext(Dispatchers.IO) {
+                    llm.transcribe(AudioRecorder.testToneWav(), keys, url, model)
                 }
-                transcript.take(100)
+                "${transcript.take(100)} (key ${usedIndex + 1}/${keys.size})"
             } catch (e: TranscribeException) {
                 e.message.orEmpty()
             } catch (e: Exception) {

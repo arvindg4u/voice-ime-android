@@ -1,47 +1,52 @@
 # Voice IME
 
 A voice-ONLY Android keyboard (InputMethodService). No keys — you speak, the IME
-records 16 kHz mono PCM, sends it as WAV to an OpenAI-compatible
-`/chat/completions` endpoint as base64 `input_audio`, and pastes the transcript
-via clipboard + `commitText`.
+records 16 kHz mono PCM, sends it as WAV to the Gemini `generateContent` API as
+base64 inline audio, and pastes the transcript via clipboard + `commitText`.
 
 ## Setup
 
 1. Install the debug APK (built by CI) and open the **Voice IME** app.
-2. Enter **Base URL** (default `https://api.openai.com/v1`), **API key**, and
-   **Model** (an OpenAI audio model, e.g. `gpt-audio-1.5`), then Save.
+2. Enter **Base URL** (default
+   `https://generativelanguage.googleapis.com/v1beta`), **API keys** (one per
+   line), and **Model** (e.g. `gemini-2.5-flash`), then Save.
 3. Tap **Enable keyboard**, turn on Voice IME in system input settings, and
    select it as the current keyboard.
 4. Grant microphone permission when prompted.
 
-## Gemini (direct, free tier)
+## Key rotation
 
-1. Base URL `https://generativelanguage.googleapis.com/v1beta`, key = AI Studio key, model e.g. `gemini-2.5-flash`.
-2. The app auto-detects Gemini by the base-URL host and calls `generateContent` natively.
-3. Everything else (OpenAI-compatible URLs) keeps using `/chat/completions`.
+Put one API key per line in the keys field. On a request the client tries keys
+in round-robin order starting from its cursor; on HTTP 429 it moves to the next
+key automatically. After a success the cursor advances to
+`(usedIndex + 1) % n`, so load spreads evenly instead of hammering the first
+key. All keys 429'd → "Rate limited on all keys — retry later". Non-429 errors
+(e.g. 401 bad key) fail immediately without burning the other keys.
 
 ## How it works
 
 Voice → `AudioRecorder` (AudioRecord, VOICE_RECOGNITION, 16 kHz mono 16-bit PCM)
-→ WAV in memory → `LlmClient` POSTs `{baseUrl}/chat/completions` with
-`{model, modalities:[text], messages:[{role:user, content:[{type:text,…},
-{type:input_audio,input_audio:{data:base64,format:wav}}]}]}` → transcript from
-`choices[0].message.content` → copied to clipboard and committed with
-`commitText` (toast: "Copied — tap to paste"). Recording stops via Stop button
-or a 60 s auto-stop. Password fields require a second mic tap to confirm.
+→ WAV in memory → `LlmClient` POSTs
+`{baseUrl}/models/{model}:generateContent` with
+`{contents:[{parts:[{inlineData:{mimeType:audio/wav,data:base64}},{text:…}}]}]}`
+→ transcript joined from all candidates' parts → copied to clipboard and
+committed with `commitText` (toast: "Copied — tap to paste"). Recording stops
+via Stop button or a 5 min auto-stop. Password fields require a second mic tap
+to confirm.
 
 ## Limits
 
-- Keep clips under ~20 seconds for best results; hard cap is 60 s.
-- OpenAI audio-capable chat models only (e.g. `gpt-audio-1.5`,
-  `gpt-4o-audio-preview`); plain text models return 404/405-style errors.
+- Recording cap is 5 min. At 16 kHz mono 16-bit (32 KB/s ≈ 1.9 MB/min WAV,
+  ×4/3 base64 ≈ 2.6 MB/min JSON) a full 5 min clip is ≈13 MB of request JSON —
+  comfortably under the 20 MB inline-audio ceiling.
+- Gemini transcription supports up to 1 hour of audio; we stay well inside that.
 - Debug APK built by CI — not Play-ready, no release signing.
 
 ## Privacy
 
 - Audio lives in memory only and is nulled after each request; nothing is
   written to disk.
-- The API key is stored in EncryptedSharedPreferences and is never logged.
+- API keys are stored in EncryptedSharedPreferences and are never logged.
 - `android:allowBackup=false`; the settings screen sets `FLAG_SECURE`.
 
 ## Origin

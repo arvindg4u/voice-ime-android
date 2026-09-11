@@ -11,7 +11,7 @@
     <string name="ime_cancel">Cancel</string>
     <string name="ime_retry">Retry</string>
     <string name="ime_settings">Settings</string>
-    <string name="ime_hint_clips">Keep clips under ~20 seconds</string>
+    <string name="ime_hint_clips">Speak naturally — up to 5 minutes</string>
     <string name="ime_copied_paste">Copied — tap to paste</string>
     <string name="ime_password_confirm">Password field — tap mic again to confirm</string>
     <string name="ime_error_no_key">No API key — open Settings</string>
@@ -21,14 +21,15 @@
     <string name="ime_mic_blocked_hint">Mic seems blocked — check another app isn\'t using it</string>
     <string name="ime_error_empty">Got empty transcript — try again</string>
     <string name="ime_error_network">Network error — check connection</string>
+    <string name="ime_error_rate_all">Rate limited on all keys — retry later</string>
 
     <!-- Settings -->
     <string name="settings_base_url">Base URL</string>
-    <string name="settings_base_url_hint">https://api.openai.com/v1 or Google generateContent URL</string>
-    <string name="settings_api_key">API key</string>
-    <string name="settings_api_key_hint">sk-…</string>
+    <string name="settings_base_url_hint">https://generativelanguage.googleapis.com/v1beta</string>
+    <string name="settings_api_key">API keys</string>
+    <string name="settings_api_key_hint">One API key per line — auto-rotates on rate limit</string>
     <string name="settings_model">Model</string>
-    <string name="settings_model_hint">OpenAI audio model, e.g. gpt-audio-1.5</string>
+    <string name="settings_model_hint">Gemini model, e.g. gemini-2.5-flash</string>
     <string name="settings_save">Save</string>
     <string name="settings_test">Test</string>
     <string name="settings_enable_keyboard">Enable keyboard</string>

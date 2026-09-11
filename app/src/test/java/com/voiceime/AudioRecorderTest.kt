@@ -40,6 +40,11 @@ class AudioRecorderTest {
     }
 
     @Test
+    fun `max duration is five minutes`() {
+        assertEquals(300_000L, AudioRecorder.MAX_DURATION_MS)
+    }
+
+    @Test
     fun `testToneWav is a 1s 16kHz mono 16-bit wav`() {
         val wav = AudioRecorder.testToneWav()
         assertEquals(44 + 16000 * 2, wav.size)

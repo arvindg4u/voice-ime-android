@@ -19,7 +19,7 @@ import kotlin.math.sqrt
 
 /**
  * Captures 16 kHz mono 16-bit PCM via VOICE_RECOGNITION source and encodes to WAV.
- * Simple pattern: stop button + 60 s auto-stop. No VAD library, no JNI.
+ * Simple pattern: stop button + 5 min auto-stop. No VAD library, no JNI.
  */
 class AudioRecorder(
     private val context: Context,
@@ -27,7 +27,7 @@ class AudioRecorder(
 ) {
     companion object {
         const val SAMPLE_RATE = 16000
-        const val MAX_DURATION_MS = 60_000L
+        const val MAX_DURATION_MS = 300_000L
         const val SILENCE_PEAK_THRESHOLD = 0.02f
 
         /** Pure helper: true when peak is below the silence threshold. */

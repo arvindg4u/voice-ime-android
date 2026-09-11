@@ -1,62 +1,22 @@
 package com.voiceime
 
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class LlmClientTest {
 
     private val client = LlmClient()
 
-    @Test
-    fun `buildRequestJson is input-only with no modalities or top-level audio`() {
-        val body = client.buildRequestJson("gpt-audio-1.5", "QUJDRA==")
-        val json = JSONObject(body)
-
-        assertEquals("gpt-audio-1.5", json.getString("model"))
-        assertFalse("request must not contain modalities", json.has("modalities"))
-        assertFalse("request must not contain top-level audio", json.has("audio"))
-
-        val content = json.getJSONArray("messages").getJSONObject(0).getJSONArray("content")
-        var foundInputAudio = false
-        for (i in 0 until content.length()) {
-            val part = content.getJSONObject(i)
-            if (part.optString("type") == "input_audio") {
-                val inputAudio = part.getJSONObject("input_audio")
-                assertEquals("QUJDRA==", inputAudio.getString("data"))
-                assertEquals("wav", inputAudio.getString("format"))
-                foundInputAudio = true
-            }
-        }
-        assertTrue("messages content must contain an input_audio part", foundInputAudio)
-        assertTrue(body.contains("\"format\":\"wav\""))
-    }
-
-    @Test
-    fun `parseTranscript returns content when present`() {
-        val payload = """{"choices":[{"message":{"role":"assistant","content":"  hello world  "}}]}"""
-        assertEquals("hello world", client.parseTranscript(payload))
-    }
-
-    @Test
-    fun `parseTranscript falls back to audio transcript when content is null or blank`() {
-        val nullContent = """{"choices":[{"message":{"role":"assistant","content":null,"audio":{"transcript":" hi there "}}}]}"""
-        assertEquals("hi there", client.parseTranscript(nullContent))
-
-        val blankContent = """{"choices":[{"message":{"role":"assistant","content":"   ","audio":{"transcript":"fallback works"}}}]}"""
-        assertEquals("fallback works", client.parseTranscript(blankContent))
-    }
-
-    @Test(expected = TranscribeException::class)
-    fun `parseTranscript throws on fully empty`() {
-        client.parseTranscript("""{"choices":[{"message":{"role":"assistant","content":"","audio":{"transcript":"  "}}}]}""")
-    }
+    private val geminiBody = """{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}"""
 
     @Test
     fun `mapHttpError includes server detail and keeps bare messages when body empty`() {
-        val body = """{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}"""
+        val body = """{"error":{"message":"Incorrect API key provided"}}"""
         val withDetail = client.mapHttpError(401, body)
         assertTrue(withDetail.contains("Check API key in settings"))
         assertTrue(withDetail.contains("Incorrect API key provided"))
@@ -65,15 +25,9 @@ class LlmClientTest {
     }
 
     @Test
-    fun `isGeminiBaseUrl detects Google host`() {
-        assertTrue(client.isGeminiBaseUrl("https://generativelanguage.googleapis.com/v1beta"))
-        assertTrue(client.isGeminiBaseUrl("https://GENERATIVELANGUAGE.GOOGLEAPIS.COM/v1beta/"))
-    }
-
-    @Test
-    fun `isGeminiBaseUrl rejects OpenAI-compatible hosts`() {
-        assertFalse(client.isGeminiBaseUrl("https://api.openai.com/v1"))
-        assertFalse(client.isGeminiBaseUrl(""))
+    fun `mapHttpError 404 points at model`() {
+        val msg = client.mapHttpError(404, "")
+        assertTrue(msg.contains("Model not found or no access"))
     }
 
     @Test
@@ -107,5 +61,145 @@ class LlmClientTest {
     @Test(expected = TranscribeException::class)
     fun `parseGeminiTranscript throws on empty or missing candidates`() {
         client.parseGeminiTranscript("""{"candidates":[]}""")
+    }
+
+    @Test
+    fun `normalizeKeys trims drops blanks and dedupes keeping order`() {
+        assertEquals(
+            listOf("a", "b", "c"),
+            client.normalizeKeys(listOf("  a ", "", "b", "a", "  ", "c", "b")),
+        )
+    }
+
+    @Test
+    fun `normalizeKeys empty input stays empty`() {
+        assertEquals(emptyList<String>(), client.normalizeKeys(listOf("", "   ")))
+    }
+
+    @Test
+    fun `transcribe success returns transcript and used index`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(geminiBody))
+        server.start()
+        try {
+            val (text, used) = client.transcribe(
+                byteArrayOf(1, 2, 3),
+                listOf("key1", "key2"),
+                server.url("/v1beta").toString(),
+                "m",
+            )
+            assertEquals("hi", text)
+            assertEquals(0, used)
+            val req = server.takeRequest()
+            assertEquals("key1", req.getHeader("x-goog-api-key"))
+            assertTrue(req.path!!.contains(":generateContent"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `transcribe rotates to next key on 429`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(429))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(geminiBody))
+        server.start()
+        try {
+            val (text, used) = client.transcribe(
+                byteArrayOf(1, 2, 3),
+                listOf("key1", "key2"),
+                server.url("/v1beta").toString(),
+                "m",
+            )
+            assertEquals("hi", text)
+            assertEquals(1, used)
+            assertEquals(2, server.requestCount)
+            server.takeRequest()
+            val second = server.takeRequest()
+            assertEquals("key2", second.getHeader("x-goog-api-key"))
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `transcribe all 429 throws rate-all message`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(429))
+        server.enqueue(MockResponse().setResponseCode(429))
+        server.start()
+        try {
+            try {
+                client.transcribe(
+                    byteArrayOf(1, 2, 3),
+                    listOf("key1", "key2"),
+                    server.url("/v1beta").toString(),
+                    "m",
+                )
+                fail("expected TranscribeException")
+            } catch (e: TranscribeException) {
+                assertTrue(e.message!!.contains("Rate limited on all keys"))
+            }
+            assertEquals(2, server.requestCount)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `transcribe 401 fails immediately without rotation`() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setResponseCode(401)
+                .setBody("""{"error":{"message":"bad key"}}"""),
+        )
+        server.start()
+        try {
+            try {
+                client.transcribe(
+                    byteArrayOf(1, 2, 3),
+                    listOf("key1", "key2"),
+                    server.url("/v1beta").toString(),
+                    "m",
+                )
+                fail("expected TranscribeException")
+            } catch (e: TranscribeException) {
+                assertTrue(e.message!!.contains("Check API key"))
+            }
+            assertEquals(1, server.requestCount)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `transcribe empty keys throws no-key message`() {
+        try {
+            client.transcribe(byteArrayOf(1), listOf("  ", ""), "http://x/", "m")
+            fail("expected TranscribeException")
+        } catch (e: TranscribeException) {
+            assertEquals("No API key — open Settings", e.message)
+        }
+    }
+
+    @Test
+    fun `transcribe startIndex wraps try order`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setResponseCode(200).setBody(geminiBody))
+        server.start()
+        try {
+            val (_, used) = client.transcribe(
+                byteArrayOf(1, 2, 3),
+                listOf("key1", "key2"),
+                server.url("/v1beta").toString(),
+                "m",
+                startIndex = 1,
+            )
+            assertEquals(1, used)
+            val req = server.takeRequest()
+            assertEquals("key2", req.getHeader("x-goog-api-key"))
+        } finally {
+            server.shutdown()
+        }
     }
 }
