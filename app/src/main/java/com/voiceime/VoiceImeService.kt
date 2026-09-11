@@ -10,10 +10,11 @@ import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.util.Log
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
-import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -50,8 +51,11 @@ class VoiceImeService : InputMethodService() {
     }
 
     private var rootView: View? = null
-    private var micButton: ImageButton? = null
+    /** Mic control: FAB (ImageButton) in the normal view, plain Button in fallback. */
+    private var micButton: View? = null
     private var statusText: TextView? = null
+    /** True when the input view is the programmatic minimal fallback (inflate failed). */
+    private var fallbackMode = false
     private var timerText: TextView? = null
     private var waveView: WaveformView? = null
     private var statusDot: View? = null
@@ -86,6 +90,19 @@ class VoiceImeService : InputMethodService() {
 
     override fun onCreateInputView(): View {
         rootView?.let { return it }
+        return try {
+            val view = inflateInputView()
+            fallbackMode = false
+            Log.e("VoiceIme", "input view ready state=$state")
+            view
+        } catch (t: Throwable) {
+            Log.e("VoiceIme", "input view inflate failed, using fallback", t)
+            fallbackMode = true
+            buildFallbackView()
+        }
+    }
+
+    private fun inflateInputView(): View {
         val view = layoutInflater.inflate(R.layout.ime_voice_view, null)
         micButton = view.findViewById(R.id.imeMic)
         statusText = view.findViewById(R.id.imeStatus)
@@ -125,11 +142,51 @@ class VoiceImeService : InputMethodService() {
         return view
     }
 
+    /**
+     * Minimal programmatic input view used when XML inflation throws (custom
+     * views, M3 styles, theme attrs can all fail per-device). Framework widgets
+     * only; reuses imeMic/imeStatus ids so existing listeners and renderState
+     * keep working. All other view fields are nulled so renderState's ?.
+     * logic skips them.
+     */
+    private fun buildFallbackView(): View {
+        val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val mic = Button(this).apply {
+            id = R.id.imeMic
+            text = getString(R.string.ime_mic_description)
+            setOnClickListener { onMicTapped() }
+        }
+        val status = TextView(this).apply {
+            id = R.id.imeStatus
+            setText(R.string.ime_status_idle)
+        }
+        layout.addView(mic)
+        layout.addView(status)
+        micButton = mic
+        statusText = status
+        timerText = null
+        waveView = null
+        statusDot = null
+        dotIdle = null
+        dotRecording = null
+        dotUploading = null
+        dotError = null
+        stopButton = null
+        cancelButton = null
+        retryButton = null
+        settingsButton = null
+        enterButton = null
+        rootView = layout
+        renderState()
+        return layout
+    }
+
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         lastEditorInfo = info
         passwordField = isPasswordField(info)
         passwordArmed = false
+        Log.e("VoiceIme", "start input state=$state fallback=$fallbackMode restarting=$restarting")
         renderState()
     }
 
