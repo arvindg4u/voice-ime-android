@@ -31,6 +31,15 @@ shapes every transcription including the Test button tone. Examples: "Add
 punctuation and paragraph breaks" (formatting); "Keep Hinglish words as-is,
 don't translate them" (Hinglish keep-as-is). Leave it blank to disable.
 
+
+## Design (M3 Dynamic)
+
+Material 3 dynamic color (wallpaper-derived on Android 12+, static M3 fallback
+below) with a live waveform hero as the single memorable element. IME state is
+shown by a status dot (outline idle / primary recording / tertiary uploading /
+error red) plus a 48-bar `WaveformView` that invalidates only on amplitude
+change > 0.02 (~30 fps max, zero per-frame allocation).
+
 ## How it works
 
 Voice → `AudioRecorder` (AudioRecord, VOICE_RECOGNITION, 16 kHz mono 16-bit PCM)

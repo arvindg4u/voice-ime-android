@@ -1,91 +1,129 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
+    android:background="?attr/colorSurface"
     android:padding="16dp">
 
-    <TextView
-        android:id="@+id/imeStatus"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="@string/ime_status_idle" />
-
+    <!-- Top status row: state dot + status + timer right -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:gravity="center_vertical">
 
-        <ImageButton
-            android:id="@+id/imeMic"
-            android:layout_width="64dp"
-            android:layout_height="64dp"
-            android:contentDescription="@string/ime_mic_description"
-            android:src="@android:drawable/ic_btn_speak_now" />
+        <View
+            android:id="@+id/imeStatusDot"
+            android:layout_width="8dp"
+            android:layout_height="8dp"
+            android:background="@drawable/ime_status_dot" />
 
-        <LinearLayout
+        <TextView
+            android:id="@+id/imeStatus"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:orientation="vertical"
-            android:paddingStart="12dp">
+            android:layout_marginStart="8dp"
+            android:text="@string/ime_status_idle"
+            android:textAppearance="?attr/textAppearanceTitleMedium"
+            android:textColor="?attr/colorOnSurface" />
 
-            <TextView
-                android:id="@+id/imeTimer"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="0:00" />
-
-            <ProgressBar
-                android:id="@+id/imeLevel"
-                style="?android:attr/progressBarStyleHorizontal"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:max="100" />
-        </LinearLayout>
-
-        <Button
-            android:id="@+id/imeStop"
+        <TextView
+            android:id="@+id/imeTimer"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/ime_stop" />
+            android:text="0:00"
+            android:textAppearance="?attr/textAppearanceLabelSmall"
+            android:textColor="?attr/colorOnSurfaceVariant" />
     </LinearLayout>
 
+    <!-- HERO waveform -->
+    <com.voiceime.WaveformView
+        android:id="@+id/imeWave"
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:layout_marginTop="12dp" />
+
+    <!-- Mic row: FAB mic left, Stop pill, Enter tonal right -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:layout_marginTop="12dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/imeMic"
+            android:layout_width="88dp"
+            android:layout_height="88dp"
+            android:layout_margin="0dp"
+            android:contentDescription="@string/ime_mic_description"
+            android:src="@android:drawable/ic_btn_speak_now"
+            app:fabCustomSize="88dp"
+            app:maxImageSize="36dp" />
 
         <Button
-            android:id="@+id/imeCancel"
+            android:id="@+id/imeStop"
+            style="@style/Widget.Material3.Button"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/ime_cancel" />
+            android:layout_marginStart="12dp"
+            android:backgroundTint="?attr/colorErrorContainer"
+            android:text="@string/ime_stop"
+            android:textColor="?attr/colorOnErrorContainer"
+            android:visibility="gone" />
 
-        <Button
-            android:id="@+id/imeRetry"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/ime_retry" />
-
-        <Button
-            android:id="@+id/imeSettings"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/ime_settings" />
+        <View
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_weight="1" />
 
         <Button
             android:id="@+id/imeEnter"
+            style="@style/Widget.Material3.Button.TonalButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:contentDescription="@string/ime_enter_description"
             android:text="@string/ime_enter" />
     </LinearLayout>
 
+    <!-- Second row: text buttons, visibility logic unchanged -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/imeCancel"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ime_cancel" />
+
+        <Button
+            android:id="@+id/imeRetry"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ime_retry" />
+
+        <Button
+            android:id="@+id/imeSettings"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ime_settings" />
+    </LinearLayout>
+
     <TextView
         android:id="@+id/imeHint"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/ime_hint_clips" />
+        android:layout_marginTop="8dp"
+        android:text="@string/ime_hint_clips"
+        android:textAppearance="?attr/textAppearanceLabelSmall"
+        android:textColor="?attr/colorOnSurfaceVariant" />
 </LinearLayout>

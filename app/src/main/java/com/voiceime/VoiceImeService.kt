@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
@@ -13,7 +14,6 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.ImageButton
-import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -53,7 +53,12 @@ class VoiceImeService : InputMethodService() {
     private var micButton: ImageButton? = null
     private var statusText: TextView? = null
     private var timerText: TextView? = null
-    private var levelBar: ProgressBar? = null
+    private var waveView: WaveformView? = null
+    private var statusDot: View? = null
+    private var dotIdle: ColorStateList? = null
+    private var dotRecording: ColorStateList? = null
+    private var dotUploading: ColorStateList? = null
+    private var dotError: ColorStateList? = null
     private var stopButton: Button? = null
     private var cancelButton: Button? = null
     private var retryButton: Button? = null
@@ -85,7 +90,23 @@ class VoiceImeService : InputMethodService() {
         micButton = view.findViewById(R.id.imeMic)
         statusText = view.findViewById(R.id.imeStatus)
         timerText = view.findViewById(R.id.imeTimer)
-        levelBar = view.findViewById(R.id.imeLevel)
+        waveView = view.findViewById(R.id.imeWave)
+        statusDot = view.findViewById(R.id.imeStatusDot)
+        val attrs = intArrayOf(
+            com.google.android.material.R.attr.colorOutlineVariant,
+            com.google.android.material.R.attr.colorPrimary,
+            com.google.android.material.R.attr.colorTertiary,
+            com.google.android.material.R.attr.colorError,
+        )
+        val ta = obtainStyledAttributes(attrs)
+        try {
+            dotIdle = ColorStateList.valueOf(ta.getColor(0, 0xFF808080.toInt()))
+            dotRecording = ColorStateList.valueOf(ta.getColor(1, 0xFF808080.toInt()))
+            dotUploading = ColorStateList.valueOf(ta.getColor(2, 0xFF808080.toInt()))
+            dotError = ColorStateList.valueOf(ta.getColor(3, 0xFF808080.toInt()))
+        } finally {
+            ta.recycle()
+        }
         stopButton = view.findViewById(R.id.imeStop)
         cancelButton = view.findViewById(R.id.imeCancel)
         retryButton = view.findViewById(R.id.imeRetry)
@@ -191,7 +212,7 @@ class VoiceImeService : InputMethodService() {
             this@VoiceImeService,
             onLevel = { level ->
                 mainHandler.post {
-                    levelBar?.progress = (level * 100).toInt().coerceIn(0, 100)
+                    waveView?.setAmplitude(level)
                     if (state == State.RECORDING && recorder?.isMicMaybeBlocked() == true) {
                         val hint = getString(R.string.ime_mic_blocked_hint)
                         if (statusText?.text.toString() != hint) {
@@ -375,6 +396,12 @@ class VoiceImeService : InputMethodService() {
     }
 
     private fun renderState() {
+        statusDot?.backgroundTintList = when (state) {
+            State.RECORDING -> dotRecording
+            State.UPLOADING -> dotUploading
+            State.ERROR -> dotError
+            else -> dotIdle
+        }
         val recording = state == State.RECORDING
         val uploading = state == State.UPLOADING
         val error = state == State.ERROR
@@ -393,7 +420,7 @@ class VoiceImeService : InputMethodService() {
         if (state == State.IDLE) {
             statusText?.setText(R.string.ime_status_idle)
             timerText?.text = "0:00"
-            levelBar?.progress = 0
+            waveView?.reset()
         }
     }
 
