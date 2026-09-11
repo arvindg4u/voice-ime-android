@@ -63,4 +63,49 @@ class LlmClientTest {
 
         assertEquals("Rate limited — retry", client.mapHttpError(429, ""))
     }
+
+    @Test
+    fun `isGeminiBaseUrl detects Google host`() {
+        assertTrue(client.isGeminiBaseUrl("https://generativelanguage.googleapis.com/v1beta"))
+        assertTrue(client.isGeminiBaseUrl("https://GENERATIVELANGUAGE.GOOGLEAPIS.COM/v1beta/"))
+    }
+
+    @Test
+    fun `isGeminiBaseUrl rejects OpenAI-compatible hosts`() {
+        assertFalse(client.isGeminiBaseUrl("https://api.openai.com/v1"))
+        assertFalse(client.isGeminiBaseUrl(""))
+    }
+
+    @Test
+    fun `buildGeminiRequestJson carries wav inlineData and instruction text`() {
+        val body = client.buildGeminiRequestJson("QUJDRA==")
+        val json = JSONObject(body)
+        val parts = json.getJSONArray("contents").getJSONObject(0).getJSONArray("parts")
+        val inline = parts.getJSONObject(0).getJSONObject("inlineData")
+        assertEquals("audio/wav", inline.getString("mimeType"))
+        assertEquals("QUJDRA==", inline.getString("data"))
+        val text = parts.getJSONObject(1).getString("text")
+        assertTrue(text.contains("Transcribe the speech exactly"))
+    }
+
+    @Test
+    fun `geminiUrl appends model generateContent path`() {
+        assertEquals(
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            client.geminiUrl("https://generativelanguage.googleapis.com/v1beta/", "gemini-2.5-flash"),
+        )
+    }
+
+    @Test
+    fun `parseGeminiTranscript joins all candidates parts text`() {
+        val payload = """{"candidates":[
+            |{"content":{"parts":[{"text":"hello "},{"text":"world"}]}},
+            |{"content":{"parts":[{"text":"!"}]}}]}""".trimMargin()
+        assertEquals("hello world!", client.parseGeminiTranscript(payload))
+    }
+
+    @Test(expected = TranscribeException::class)
+    fun `parseGeminiTranscript throws on empty or missing candidates`() {
+        client.parseGeminiTranscript("""{"candidates":[]}""")
+    }
 }

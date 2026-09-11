@@ -11,6 +11,8 @@ class SettingsStore(context: Context) {
     companion object {
         const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
         const val DEFAULT_MODEL = "gpt-audio-1.5"
+        const val GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+        const val DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
         private const val PREFS_NAME = "voice_ime_settings"
         private const val KEY_BASE_URL = "base_url"

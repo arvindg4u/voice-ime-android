@@ -24,7 +24,7 @@
 
     <!-- Settings -->
     <string name="settings_base_url">Base URL</string>
-    <string name="settings_base_url_hint">https://api.openai.com/v1</string>
+    <string name="settings_base_url_hint">https://api.openai.com/v1 or Google generateContent URL</string>
     <string name="settings_api_key">API key</string>
     <string name="settings_api_key_hint">sk-…</string>
     <string name="settings_model">Model</string>

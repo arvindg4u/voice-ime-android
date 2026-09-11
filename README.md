@@ -14,6 +14,12 @@ via clipboard + `commitText`.
    select it as the current keyboard.
 4. Grant microphone permission when prompted.
 
+## Gemini (direct, free tier)
+
+1. Base URL `https://generativelanguage.googleapis.com/v1beta`, key = AI Studio key, model e.g. `gemini-2.5-flash`.
+2. The app auto-detects Gemini by the base-URL host and calls `generateContent` natively.
+3. Everything else (OpenAI-compatible URLs) keeps using `/chat/completions`.
+
 ## How it works
 
 Voice → `AudioRecorder` (AudioRecord, VOICE_RECOGNITION, 16 kHz mono 16-bit PCM)
