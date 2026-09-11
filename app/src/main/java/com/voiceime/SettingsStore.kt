@@ -5,17 +5,21 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-/** Encrypted settings storage for base URL, API keys (one per line), and model. */
+/** Encrypted settings storage for base URL, API keys (one per line), model, and custom prompt. */
 class SettingsStore(context: Context) {
 
     companion object {
         const val DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
         const val DEFAULT_MODEL = "gemini-2.5-flash"
 
+        /** Max chars for the custom prompt; longer input is silently truncated on save. */
+        const val MAX_CUSTOM_PROMPT = 2000
+
         private const val PREFS_NAME = "voice_ime_settings"
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_API_KEY = "api_key"
         private const val KEY_MODEL = "model"
+        private const val KEY_CUSTOM_PROMPT = "custom_prompt"
     }
 
     private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
@@ -53,6 +57,13 @@ class SettingsStore(context: Context) {
             .ifEmpty { DEFAULT_MODEL }
         set(value) {
             prefs.edit().putString(KEY_MODEL, value.ifEmpty { DEFAULT_MODEL }).apply()
+        }
+
+    /** Free-form user preferences appended to the system instruction; "" disables. Trims; caps at 2000 chars. */
+    var customPrompt: String
+        get() = prefs.getString(KEY_CUSTOM_PROMPT, "").orEmpty().trim()
+        set(value) {
+            prefs.edit().putString(KEY_CUSTOM_PROMPT, value.trim().take(MAX_CUSTOM_PROMPT)).apply()
         }
 
     /** Trim trailing slashes and legacy "/chat/completions"; empty falls back to default. */

@@ -43,6 +43,46 @@ class LlmClientTest {
     }
 
     @Test
+    fun `buildGeminiRequestJson always carries systemInstruction with base role text`() {
+        val json = JSONObject(client.buildGeminiRequestJson("QUJDRA=="))
+        val systemText = json.getJSONObject("systemInstruction")
+            .getJSONArray("parts").getJSONObject(0).getString("text")
+        assertTrue(systemText.contains("You are a speech transcription assistant"))
+        assertTrue(systemText.contains("If there is no speech, output nothing"))
+    }
+
+    @Test
+    fun `buildGeminiRequestJson appends custom prompt under User preferences`() {
+        val json = JSONObject(client.buildGeminiRequestJson("QUJDRA==", "Keep Hinglish as-is"))
+        val systemText = json.getJSONObject("systemInstruction")
+            .getJSONArray("parts").getJSONObject(0).getString("text")
+        assertTrue(systemText.startsWith(BASE_SYSTEM))
+        assertTrue(systemText.contains("User preferences:\nKeep Hinglish as-is"))
+    }
+
+    @Test
+    fun `buildGeminiRequestJson blank custom omits User preferences marker`() {
+        for (blank in listOf("", "   ")) {
+            val json = JSONObject(client.buildGeminiRequestJson("QUJDRA==", blank))
+            val systemText = json.getJSONObject("systemInstruction")
+                .getJSONArray("parts").getJSONObject(0).getString("text")
+            assertEquals(BASE_SYSTEM, systemText)
+            assertTrue(!systemText.contains("User preferences:"))
+        }
+    }
+
+    @Test
+    fun `buildGeminiRequestJson user text part ignores custom prompt`() {
+        val expected = "Transcribe the speech exactly. " +
+            "Output only the transcript, no commentary."
+        for (custom in listOf("", "Add punctuation")) {
+            val json = JSONObject(client.buildGeminiRequestJson("QUJDRA==", custom))
+            val parts = json.getJSONArray("contents").getJSONObject(0).getJSONArray("parts")
+            assertEquals(expected, parts.getJSONObject(1).getString("text"))
+        }
+    }
+
+    @Test
     fun `geminiUrl appends model generateContent path`() {
         assertEquals(
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",

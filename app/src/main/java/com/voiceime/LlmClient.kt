@@ -14,6 +14,14 @@ import java.util.concurrent.TimeUnit
 class TranscribeException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /**
+ * App-critical transcription constraints. Always sent as systemInstruction;
+ * user preferences are appended below it, never mixed into the user part.
+ */
+internal const val BASE_SYSTEM =
+    "You are a speech transcription assistant. Transcribe the user's speech exactly. " +
+        "Output only the transcript, no commentary. If there is no speech, output nothing."
+
+/**
  * Sends WAV audio to the Gemini generateContent endpoint as base64 inline
  * audio and returns the transcript joined from all candidates' parts.
  * Key rotation lives here: keys are tried in round-robin order from
@@ -43,12 +51,13 @@ class LlmClient {
         baseUrl: String,
         model: String,
         startIndex: Int = 0,
+        customPrompt: String = "",
     ): Pair<String, Int> {
         val keys = normalizeKeys(apiKeys)
         if (keys.isEmpty()) throw TranscribeException("No API key — open Settings")
         val audioB64 = java.util.Base64.getEncoder().encodeToString(wav)
 
-        val body = buildGeminiRequestJson(audioB64)
+        val body = buildGeminiRequestJson(audioB64, customPrompt)
         val url = geminiUrl(baseUrl, model)
         val host = try { java.net.URL(baseUrl).host } catch (e: Exception) { baseUrl }
         debugLog(
@@ -113,9 +122,27 @@ class LlmClient {
     internal fun normalizeKeys(apiKeys: List<String>): List<String> =
         apiKeys.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
 
-    /** Builds the Gemini generateContent body: WAV audio as inline data plus a text instruction. */
-    internal fun buildGeminiRequestJson(audioB64: String): String =
-        JSONObject()
+    /**
+     * Builds the Gemini generateContent body: WAV audio as inline data, a text
+     * instruction, plus a systemInstruction carrying the app-critical
+     * constraints and (when non-blank) the user's custom preferences.
+     * The custom prompt is never logged.
+     */
+    internal fun buildGeminiRequestJson(audioB64: String, customPrompt: String = ""): String {
+        val trimmed = customPrompt.trim()
+        val systemText = if (trimmed.isEmpty()) {
+            BASE_SYSTEM
+        } else {
+            "$BASE_SYSTEM\n\nUser preferences:\n$trimmed"
+        }
+        return JSONObject()
+            .put(
+                "systemInstruction",
+                JSONObject().put(
+                    "parts",
+                    JSONArray().put(JSONObject().put("text", systemText)),
+                ),
+            )
             .put(
                 "contents",
                 JSONArray().put(
@@ -144,6 +171,7 @@ class LlmClient {
                 ),
             )
             .toString()
+    }
 
     /** Gemini endpoint for a model: {base}/models/{model}:generateContent. */
     internal fun geminiUrl(baseUrl: String, model: String): String =

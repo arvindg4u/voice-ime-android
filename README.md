@@ -23,6 +23,14 @@ key automatically. After a success the cursor advances to
 key. All keys 429'd → "Rate limited on all keys — retry later". Non-429 errors
 (e.g. 401 bad key) fail immediately without burning the other keys.
 
+## Custom prompt
+
+The **Custom prompt** field (system instructions, max 2000 chars) is appended
+to the request's `systemInstruction` under a "User preferences:" heading, so it
+shapes every transcription including the Test button tone. Examples: "Add
+punctuation and paragraph breaks" (formatting); "Keep Hinglish words as-is,
+don't translate them" (Hinglish keep-as-is). Leave it blank to disable.
+
 ## How it works
 
 Voice → `AudioRecorder` (AudioRecord, VOICE_RECOGNITION, 16 kHz mono 16-bit PCM)

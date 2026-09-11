@@ -52,6 +52,20 @@
                 android:inputType="text" />
         </com.google.android.material.textfield.TextInputLayout>
 
+        <com.google.android.material.textfield.TextInputLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/settings_custom_prompt">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/settingsCustomPrompt"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="@string/settings_custom_prompt_hint"
+                android:inputType="textMultiLine|textCapSentences"
+                android:minLines="3" />
+        </com.google.android.material.textfield.TextInputLayout>
+
         <Button
             android:id="@+id/settingsSave"
             android:layout_width="match_parent"

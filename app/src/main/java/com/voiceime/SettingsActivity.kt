@@ -13,13 +13,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Edits base URL, API keys (one per line), and model. Keys never leave this screen except real transcribe. */
+/** Edits base URL, API keys (one per line), model, and custom prompt. Keys never leave this screen except real transcribe. */
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var settings: SettingsStore
     private lateinit var baseUrlField: TextInputEditText
     private lateinit var apiKeyField: TextInputEditText
     private lateinit var modelField: TextInputEditText
+    private lateinit var customPromptField: TextInputEditText
     private val llm = LlmClient()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,10 +32,12 @@ class SettingsActivity : AppCompatActivity() {
         baseUrlField = findViewById(R.id.settingsBaseUrl)
         apiKeyField = findViewById(R.id.settingsApiKey)
         modelField = findViewById(R.id.settingsModel)
+        customPromptField = findViewById(R.id.settingsCustomPrompt)
 
         baseUrlField.setText(settings.baseUrl)
         apiKeyField.setText(settings.apiKeys.joinToString("\n"))
         modelField.setText(settings.model)
+        customPromptField.setText(settings.customPrompt)
 
         findViewById<Button>(R.id.settingsSave).setOnClickListener { save() }
         findViewById<Button>(R.id.settingsTest).setOnClickListener { test() }
@@ -48,8 +51,10 @@ class SettingsActivity : AppCompatActivity() {
         settings.apiKeys = apiKeyField.text?.toString().orEmpty()
             .split("\n").map { line -> line.trim() }.filter { line -> line.isNotEmpty() }
         settings.model = modelField.text?.toString().orEmpty()
+        settings.customPrompt = customPromptField.text?.toString().orEmpty()
         baseUrlField.setText(settings.baseUrl)
         modelField.setText(settings.model)
+        customPromptField.setText(settings.customPrompt)
         Toast.makeText(this, R.string.settings_saved, Toast.LENGTH_SHORT).show()
     }
 
@@ -69,11 +74,15 @@ class SettingsActivity : AppCompatActivity() {
             return
         }
         val model = modelField.text?.toString().orEmpty().ifEmpty { settings.model }
+        val customPrompt = customPromptField.text?.toString().orEmpty()
         testButton.isEnabled = false
         lifecycleScope.launch {
             val message = try {
                 val (transcript, usedIndex) = withContext(Dispatchers.IO) {
-                    llm.transcribe(AudioRecorder.testToneWav(), keys, url, model)
+                    llm.transcribe(
+                        AudioRecorder.testToneWav(), keys, url, model,
+                        customPrompt = customPrompt,
+                    )
                 }
                 "${transcript.take(100)} (key ${usedIndex + 1}/${keys.size})"
             } catch (e: TranscribeException) {

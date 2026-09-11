@@ -32,6 +32,8 @@
     <string name="settings_api_key_hint">One API key per line — auto-rotates on rate limit</string>
     <string name="settings_model">Model</string>
     <string name="settings_model_hint">Gemini model, e.g. gemini-2.5-flash</string>
+    <string name="settings_custom_prompt">Custom prompt</string>
+    <string name="settings_custom_prompt_hint">Custom prompt — e.g. \'Keep Hinglish as-is, add punctuation, reply in Hindi script\'</string>
     <string name="settings_save">Save</string>
     <string name="settings_test">Test</string>
     <string name="settings_enable_keyboard">Enable keyboard</string>

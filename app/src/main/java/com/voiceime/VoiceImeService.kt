@@ -252,6 +252,7 @@ class VoiceImeService : InputMethodService() {
         val baseUrl = settings.baseUrl
         val apiKeys = settings.apiKeys
         val model = settings.model
+        val customPrompt = settings.customPrompt
         val start = keyCursor
         transcribeJob = serviceScope.launch {
             var transcript: String? = null
@@ -259,7 +260,7 @@ class VoiceImeService : InputMethodService() {
             var failure: String? = null
             try {
                 val result = withContext(Dispatchers.IO) {
-                    llm.transcribe(wav, apiKeys, baseUrl, model, start)
+                    llm.transcribe(wav, apiKeys, baseUrl, model, start, customPrompt)
                 }
                 transcript = result.first
                 usedIndex = result.second
@@ -287,6 +288,7 @@ class VoiceImeService : InputMethodService() {
         val baseUrl = settings.baseUrl
         val apiKeys = settings.apiKeys
         val model = settings.model
+        val customPrompt = settings.customPrompt
         val start = keyCursor
         transcribeJob = serviceScope.launch {
             var transcript: String? = null
@@ -294,7 +296,7 @@ class VoiceImeService : InputMethodService() {
             var failure: String? = null
             try {
                 val result = withContext(Dispatchers.IO) {
-                    llm.transcribe(wav, apiKeys, baseUrl, model, start)
+                    llm.transcribe(wav, apiKeys, baseUrl, model, start, customPrompt)
                 }
                 transcript = result.first
                 usedIndex = result.second
