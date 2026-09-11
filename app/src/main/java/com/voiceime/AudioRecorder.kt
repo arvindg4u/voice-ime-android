@@ -18,6 +18,11 @@ class AudioRecorder(
     companion object {
         const val SAMPLE_RATE = 16000
         const val MAX_DURATION_MS = 60_000L
+        const val SILENCE_PEAK_THRESHOLD = 0.02f
+
+        /** Pure helper: true when peak is below the silence threshold. */
+        fun isSilent(peak: Float, threshold: Float = SILENCE_PEAK_THRESHOLD): Boolean =
+            peak < threshold
     }
 
     @Volatile
@@ -29,6 +34,9 @@ class AudioRecorder(
     private val recording = AtomicBoolean(false)
 
     private var buffer: ByteArrayOutputStream? = null
+
+    @Volatile
+    private var peakLevel = 0f
 
     @SuppressLint("MissingPermission")
     @Throws(IllegalStateException::class)
@@ -52,7 +60,12 @@ class AudioRecorder(
             throw IllegalStateException("Mic unavailable")
         }
         buffer = ByteArrayOutputStream()
+        peakLevel = 0f
         record.startRecording()
+        if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            record.release()
+            throw IllegalStateException("Mic unavailable")
+        }
         recorder = record
         recording.set(true)
         val startedAt = System.currentTimeMillis()
@@ -67,8 +80,14 @@ class AudioRecorder(
                 }
                 if (read > 0) {
                     buffer?.write(chunk, 0, read)
-                    onLevel(rmsLevel(chunk, read))
-                } else if (read < 0) {
+                    val lvl = rmsLevel(chunk, read)
+                    if (lvl > peakLevel) peakLevel = lvl
+                    onLevel(lvl)
+                } else if (read == 0) {
+                    // Healthy streams may return 0; only stop if the mic dropped.
+                    if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) break
+                } else {
+                    // read < 0 signals an error; stop capture.
                     break
                 }
             }
@@ -107,6 +126,8 @@ class AudioRecorder(
     }
 
     fun isRecording(): Boolean = recording.get()
+
+    fun peakLevel(): Float = peakLevel
 
     private fun releaseRecorder() {
         try {

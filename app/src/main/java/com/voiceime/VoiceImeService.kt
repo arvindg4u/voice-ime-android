@@ -173,6 +173,7 @@ class VoiceImeService : InputMethodService() {
         stopTimer()
         val rec = recorder
         recorder = null
+        val peak = rec?.peakLevel() ?: 0f
         val wav = try {
             rec?.stop() ?: ByteArray(0)
         } catch (e: Exception) {
@@ -182,6 +183,11 @@ class VoiceImeService : InputMethodService() {
             lastWav = null
             state = State.IDLE
             renderState()
+            return
+        }
+        if (AudioRecorder.isSilent(peak)) {
+            lastWav = null
+            showError(getString(R.string.ime_error_no_speech))
             return
         }
         if (wav.size <= 1000) {
