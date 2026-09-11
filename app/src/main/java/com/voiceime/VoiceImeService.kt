@@ -77,7 +77,7 @@ class VoiceImeService : InputMethodService() {
 
         micButton?.setOnClickListener { onMicTapped() }
         stopButton?.setOnClickListener { finishRecording(upload = true) }
-        cancelButton?.setOnClickListener { finishRecording(upload = false) }
+        cancelButton?.setOnClickListener { onCancelTapped() }
         retryButton?.setOnClickListener { retryLast() }
         settingsButton?.setOnClickListener { openSettings() }
 
@@ -136,6 +136,14 @@ class VoiceImeService : InputMethodService() {
         startRecording()
     }
 
+    private fun onCancelTapped() {
+        if (state == State.RECORDING) {
+            finishRecording(upload = false)
+        } else {
+            cancelWork()
+        }
+    }
+
     private fun startRecording() {
         cancelWork()
         val rec = AudioRecorder(onLevel = { level ->
@@ -174,6 +182,11 @@ class VoiceImeService : InputMethodService() {
             lastWav = null
             state = State.IDLE
             renderState()
+            return
+        }
+        if (wav.size <= 1000) {
+            lastWav = null
+            showError(getString(R.string.ime_error_no_audio))
             return
         }
         lastWav = wav
@@ -247,8 +260,11 @@ class VoiceImeService : InputMethodService() {
             try {
                 ic.finishComposingText()
                 ic.beginBatchEdit()
-                ic.commitText(text, 1)
-                ic.endBatchEdit()
+                try {
+                    ic.commitText(text, 1)
+                } finally {
+                    ic.endBatchEdit()
+                }
             } catch (e: Exception) {
                 // Fall through to clipboard-only path with toast.
             }
