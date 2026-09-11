@@ -36,7 +36,7 @@ class AudioRecorder(
     private var buffer: ByteArrayOutputStream? = null
 
     @Volatile
-    private var peakLevel = 0f
+    private var _peakLevel = 0f
 
     @SuppressLint("MissingPermission")
     @Throws(IllegalStateException::class)
@@ -60,7 +60,7 @@ class AudioRecorder(
             throw IllegalStateException("Mic unavailable")
         }
         buffer = ByteArrayOutputStream()
-        peakLevel = 0f
+        _peakLevel = 0f
         record.startRecording()
         if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
             record.release()
@@ -81,7 +81,7 @@ class AudioRecorder(
                 if (read > 0) {
                     buffer?.write(chunk, 0, read)
                     val lvl = rmsLevel(chunk, read)
-                    if (lvl > peakLevel) peakLevel = lvl
+                    if (lvl > _peakLevel) _peakLevel = lvl
                     onLevel(lvl)
                 } else if (read == 0) {
                     // Healthy streams may return 0; only stop if the mic dropped.
@@ -127,7 +127,7 @@ class AudioRecorder(
 
     fun isRecording(): Boolean = recording.get()
 
-    fun peakLevel(): Float = peakLevel
+    fun peakLevel(): Float = _peakLevel
 
     private fun releaseRecorder() {
         try {
