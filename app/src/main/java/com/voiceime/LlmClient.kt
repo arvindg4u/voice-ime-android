@@ -16,7 +16,7 @@ class TranscribeException(message: String, cause: Throwable? = null) : IOExcepti
 
 /**
  * Sends WAV audio to {baseUrl}/chat/completions as base64 input_audio
- * and returns the transcript from choices[0].message.content.
+ * and returns the transcript from choices[0].
  * The API key is never logged.
  */
 class LlmClient {
@@ -35,9 +35,53 @@ class LlmClient {
         val url = baseUrl.trimEnd('/') + "/chat/completions"
         val audioB64 = Base64.encodeToString(wav, Base64.NO_WRAP)
 
-        val body = JSONObject()
+        val body = buildRequestJson(model, audioB64)
+
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        val call = http.newCall(request)
+        inFlight = call
+        try {
+            val response = call.execute()
+            response.use { res ->
+                val payload = res.body?.string().orEmpty()
+                if (!res.isSuccessful) {
+                    throw TranscribeException(mapHttpError(res.code, payload))
+                }
+                return parseTranscript(payload)
+            }
+        } catch (e: TranscribeException) {
+            throw e
+        } catch (e: IOException) {
+            if (call.isCanceled()) throw TranscribeException("cancelled", e)
+            throw TranscribeException("Network error — check connection", e)
+        } catch (e: Exception) {
+            throw TranscribeException("Transcription failed", e)
+        } finally {
+            if (inFlight === call) inFlight = null
+        }
+    }
+
+    /** Cancels the in-flight transcription request, if any. */
+    fun cancel() {
+        inFlight?.cancel()
+    }
+
+    /** Builds the exact POST body for a chat-completions audio transcription request. */
+    internal fun buildRequestJson(model: String, audioB64: String): String =
+        JSONObject()
             .put("model", model)
-            .put("modalities", JSONArray().put("text"))
+            .put("modalities", JSONArray().put("text").put("audio"))
+            .put(
+                "audio",
+                JSONObject()
+                    .put("voice", "alloy")
+                    .put("format", "wav"),
+            )
             .put(
                 "messages",
                 JSONArray().put(
@@ -70,53 +114,44 @@ class LlmClient {
             )
             .toString()
 
-        val request = Request.Builder()
-            .url(url)
-            .addHeader("Authorization", "Bearer $apiKey")
-            .post(body.toRequestBody("application/json".toMediaType()))
-            .build()
+    /**
+     * Extracts the transcript from a chat-completions response payload.
+     * Reads message.content first; falls back to message.audio.transcript.
+     */
+    @Throws(TranscribeException::class)
+    internal fun parseTranscript(payload: String): String {
+        val message = JSONObject(payload)
+            .optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optJSONObject("message")
+        val text = message?.optString("content").orEmpty().trim()
+        if (text.isNotEmpty()) return text
+        val transcript = message
+            ?.optJSONObject("audio")
+            ?.optString("transcript")
+            .orEmpty()
+            .trim()
+        if (transcript.isEmpty()) throw TranscribeException("empty")
+        return transcript
+    }
 
-        val call = http.newCall(request)
-        inFlight = call
-        try {
-            val response = call.execute()
-            response.use { res ->
-                val payload = res.body?.string().orEmpty()
-                if (!res.isSuccessful) {
-                    throw TranscribeException(mapHttpError(res.code))
-                }
-                val text = JSONObject(payload)
-                    .optJSONArray("choices")
-                    ?.optJSONObject(0)
-                    ?.optJSONObject("message")
-                    ?.optString("content")
-                    .orEmpty()
-                    .trim()
-                if (text.isEmpty()) throw TranscribeException("empty")
-                return text
-            }
-        } catch (e: TranscribeException) {
-            throw e
-        } catch (e: IOException) {
-            if (call.isCanceled()) throw TranscribeException("cancelled", e)
-            throw TranscribeException("Network error — check connection", e)
-        } catch (e: Exception) {
-            throw TranscribeException("Transcription failed", e)
-        } finally {
-            if (inFlight === call) inFlight = null
+    private fun mapHttpError(code: Int): String = mapHttpError(code, "")
+
+    /** Maps an HTTP status to a user-safe message, appending server detail when present. */
+    internal fun mapHttpError(code: Int, body: String): String {
+        val base = when (code) {
+            401 -> "Check API key in settings"
+            404, 405 -> "Server does not support audio input — check base URL/model"
+            429 -> "Rate limited — retry"
+            else -> "Server error (HTTP $code)"
         }
-    }
-
-    /** Cancels the in-flight transcription request, if any. */
-    fun cancel() {
-        inFlight?.cancel()
-    }
-
-    private fun mapHttpError(code: Int): String = when (code) {
-        401 -> "Check API key in settings"
-        404, 405 -> "Server does not support audio input — check base URL/model"
-        429 -> "Rate limited — retry"
-        else -> "Server error (HTTP $code)"
+        val detail = try {
+            JSONObject(body).optJSONObject("error")?.optString("message").orEmpty().trim()
+        } catch (e: Exception) {
+            ""
+        }
+        if (detail.isEmpty()) return base
+        return "$base — ${detail.take(200)}"
     }
 
     override fun toString(): String = "LlmClient(<api key redacted>)"
