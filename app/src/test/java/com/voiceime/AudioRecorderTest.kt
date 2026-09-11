@@ -1,6 +1,5 @@
 package com.voiceime
 
-import android.test.mock.MockContext
 import android.view.inputmethod.EditorInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -63,7 +62,7 @@ class AudioRecorderTest {
 
     @Test
     fun `stop returns wav plus post-join peak`() {
-        val rec = AudioRecorder(MockContext())
+        val rec = AudioRecorder()
         val (wav, peak) = rec.stop()
         assertEquals(44, wav.size)
         assertEquals(rec.peakLevel(), peak, 0f)

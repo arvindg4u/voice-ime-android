@@ -22,7 +22,7 @@ import kotlin.math.sqrt
  * Simple pattern: stop button + 5 min auto-stop. No VAD library, no JNI.
  */
 class AudioRecorder(
-    private val context: Context,
+    private val context: Context? = null,
     private val onLevel: (Float) -> Unit = {},
 ) {
     companion object {
@@ -128,7 +128,7 @@ class AudioRecorder(
         !anyNoiseAtAll && System.currentTimeMillis() - captureStartMs > 2000
 
     private fun audioManager(): AudioManager? {
-        val svc = context.getSystemService(Context.AUDIO_SERVICE)
+        val svc = context?.getSystemService(Context.AUDIO_SERVICE)
         return svc as? AudioManager
     }
 
