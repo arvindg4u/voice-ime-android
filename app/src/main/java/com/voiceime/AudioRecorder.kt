@@ -28,7 +28,7 @@ class AudioRecorder(
     companion object {
         const val SAMPLE_RATE = 16000
         const val MAX_DURATION_MS = 300_000L
-        const val SILENCE_PEAK_THRESHOLD = 0.02f
+        const val SILENCE_PEAK_THRESHOLD = 0.008f
 
         /** Pure helper: true when peak is below the silence threshold. */
         fun isSilent(peak: Float, threshold: Float = SILENCE_PEAK_THRESHOLD): Boolean =

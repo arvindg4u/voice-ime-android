@@ -313,7 +313,6 @@ class VoiceImeService : InputMethodService() {
         } catch (e: Exception) {
             ByteArray(0) to 0f
         }
-        android.util.Log.e("VoiceIme", "capture done peak=$peak wavBytes=${wav.size} blocked=${rec?.isMicMaybeBlocked()}")
         if (!upload) {
             lastWav = null
             state = State.IDLE

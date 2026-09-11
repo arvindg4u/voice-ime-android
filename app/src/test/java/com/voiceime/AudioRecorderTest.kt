@@ -20,8 +20,10 @@ class AudioRecorderTest {
 
     @Test
     fun `isSilent respects default threshold boundary`() {
-        assertTrue(AudioRecorder.isSilent(0.019f))
-        assertFalse(AudioRecorder.isSilent(0.021f))
+        assertTrue(AudioRecorder.isSilent(0.007f))
+        assertFalse(AudioRecorder.isSilent(0.009f))
+        // Device-observed real speech peaks (0.015–0.019) must pass the gate.
+        assertFalse(AudioRecorder.isSilent(0.015f))
     }
 
     @Test
