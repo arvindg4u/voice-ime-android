@@ -18,6 +18,7 @@
     <string name="ime_error_mic">Microphone unavailable</string>
     <string name="ime_error_no_audio">No audio captured — try again</string>
     <string name="ime_error_no_speech">No speech detected — try again</string>
+    <string name="ime_mic_blocked_hint">Mic seems blocked — check another app isn\'t using it</string>
     <string name="ime_error_empty">Got empty transcript — try again</string>
     <string name="ime_error_network">Network error — check connection</string>
 

@@ -146,11 +146,20 @@ class VoiceImeService : InputMethodService() {
 
     private fun startRecording() {
         cancelWork()
-        val rec = AudioRecorder(onLevel = { level ->
-            mainHandler.post {
-                levelBar?.progress = (level * 100).toInt().coerceIn(0, 100)
-            }
-        })
+        val rec = AudioRecorder(
+            this@VoiceImeService,
+            onLevel = { level ->
+                mainHandler.post {
+                    levelBar?.progress = (level * 100).toInt().coerceIn(0, 100)
+                    if (state == State.RECORDING && recorder?.isMicMaybeBlocked() == true) {
+                        val hint = getString(R.string.ime_mic_blocked_hint)
+                        if (statusText?.text.toString() != hint) {
+                            statusText?.text = hint
+                        }
+                    }
+                }
+            },
+        )
         recorder = rec
         try {
             rec.start()

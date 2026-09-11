@@ -21,4 +21,20 @@ class AudioRecorderTest {
         assertTrue(AudioRecorder.isSilent(0.019f))
         assertFalse(AudioRecorder.isSilent(0.021f))
     }
+
+    @Test
+    fun `magnitude of silence is approximately zero`() {
+        assertTrue(AudioRecorder.magnitude(0f) < 0.001f)
+    }
+
+    @Test
+    fun `magnitude of faint signal is perceptual mid value`() {
+        val m = AudioRecorder.magnitude(0.01f)
+        assertTrue(m in 0.35f..0.50f)
+    }
+
+    @Test
+    fun `magnitude increases monotonically with rms`() {
+        assertTrue(AudioRecorder.magnitude(0.05f) > AudioRecorder.magnitude(0.01f))
+    }
 }

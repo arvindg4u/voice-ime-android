@@ -1,11 +1,18 @@
 package com.voiceime
 
 import android.annotation.SuppressLint
+import android.content.Context
+import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.MicrophoneDirection
+import android.os.Build
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
@@ -13,6 +20,7 @@ import kotlin.math.sqrt
  * Simple pattern: stop button + 60 s auto-stop. No VAD library, no JNI.
  */
 class AudioRecorder(
+    private val context: Context,
     private val onLevel: (Float) -> Unit = {},
 ) {
     companion object {
@@ -23,6 +31,13 @@ class AudioRecorder(
         /** Pure helper: true when peak is below the silence threshold. */
         fun isSilent(peak: Float, threshold: Float = SILENCE_PEAK_THRESHOLD): Boolean =
             peak < threshold
+
+        /**
+         * Perceptual level 0..1: raw RMS is near-flat for quiet signals, so this
+         * expands the low end to drive the visible level meter.
+         */
+        fun magnitude(rms: Float): Float =
+            (1.0f - 0.1f.pow(24.0f * rms)).coerceIn(0f, 1f)
     }
 
     @Volatile
@@ -38,10 +53,77 @@ class AudioRecorder(
     @Volatile
     private var _peakLevel = 0f
 
+    private var focusRequest: AudioFocusRequest? = null
+
+    @Volatile
+    private var anyNoiseAtAll = false
+
+    @Volatile
+    private var captureStartMs = 0L
+
+    /** True when ~2 s of capture show effectively no signal — mic may be blocked. */
+    fun isMicMaybeBlocked(): Boolean =
+        !anyNoiseAtAll && System.currentTimeMillis() - captureStartMs > 2000
+
+    private fun audioManager(): AudioManager? {
+        val svc = context.getSystemService(Context.AUDIO_SERVICE)
+        return svc as? AudioManager
+    }
+
+    /** Route capture to the built-in mic (or best non-BT fallback) on S+. Pre-S: no-op. */
+    private fun routeToBuiltinMic() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val am = audioManager() ?: return
+        val devices = try {
+            am.availableCommunicationDevices
+        } catch (_: Exception) {
+            return
+        }
+        val dev = devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+            ?: devices.firstOrNull { it.type != AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+            ?: return
+        try {
+            am.setCommunicationDevice(dev)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Release routing + audio focus. Finally-safe: never throws. */
+    private fun releaseAudioRoute() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager()?.let { am ->
+                try {
+                    am.clearCommunicationDevice()
+                } catch (_: Exception) {
+                }
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioManager()?.let { am ->
+                try {
+                    focusRequest?.let { am.abandonAudioFocusRequest(it) }
+                    focusRequest = null
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    private fun requestExclusiveFocus() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val am = audioManager() ?: return
+        focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE).build()
+        try {
+            focusRequest?.let { am.requestAudioFocus(it) }
+        } catch (_: Exception) {
+        }
+    }
+
     @SuppressLint("MissingPermission")
     @Throws(IllegalStateException::class)
     fun start() {
         if (recording.get()) return
+        routeToBuiltinMic()
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
@@ -57,19 +139,32 @@ class AudioRecorder(
         )
         if (record.state != AudioRecord.STATE_INITIALIZED) {
             record.release()
+            releaseAudioRoute()
             throw IllegalStateException("Mic unavailable")
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                record.setPreferredMicrophoneDirection(MicrophoneDirection.MIC_DIRECTION_TOWARDS_USER)
+            } catch (_: Exception) {
+                // Unsupported on this device/ROM; directional hint is best-effort.
+            }
+        }
+        requestExclusiveFocus()
         buffer = ByteArrayOutputStream()
         _peakLevel = 0f
+        anyNoiseAtAll = false
+        captureStartMs = System.currentTimeMillis()
         record.startRecording()
         if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
             record.release()
+            releaseAudioRoute()
             throw IllegalStateException("Mic unavailable")
         }
         recorder = record
         recording.set(true)
         val startedAt = System.currentTimeMillis()
         val thread = Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
             val chunk = ByteArray(3200)
             while (recording.get()) {
                 if (System.currentTimeMillis() - startedAt >= MAX_DURATION_MS) break
@@ -81,8 +176,9 @@ class AudioRecorder(
                 if (read > 0) {
                     buffer?.write(chunk, 0, read)
                     val lvl = rmsLevel(chunk, read)
+                    if (lvl > 0.0001f) anyNoiseAtAll = true
                     if (lvl > _peakLevel) _peakLevel = lvl
-                    onLevel(lvl)
+                    onLevel(magnitude(lvl))
                 } else if (read == 0) {
                     // Healthy streams may return 0; only stop if the mic dropped.
                     if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) break
@@ -106,10 +202,14 @@ class AudioRecorder(
             Thread.currentThread().interrupt()
         }
         recordingThread = null
-        val pcm = buffer?.toByteArray() ?: ByteArray(0)
-        buffer = null
-        releaseRecorder()
-        return pcmToWav(pcm)
+        try {
+            val pcm = buffer?.toByteArray() ?: ByteArray(0)
+            return pcmToWav(pcm)
+        } finally {
+            buffer = null
+            releaseRecorder()
+            releaseAudioRoute()
+        }
     }
 
     /** Discards any captured audio without encoding. */
@@ -119,10 +219,12 @@ class AudioRecorder(
             recordingThread?.join(2000)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
+        } finally {
+            recordingThread = null
+            buffer = null
+            releaseRecorder()
+            releaseAudioRoute()
         }
-        recordingThread = null
-        buffer = null
-        releaseRecorder()
     }
 
     fun isRecording(): Boolean = recording.get()
