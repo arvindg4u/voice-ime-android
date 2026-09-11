@@ -32,7 +32,10 @@ Voice → `AudioRecorder` (AudioRecord, VOICE_RECOGNITION, 16 kHz mono 16-bit PC
 → transcript joined from all candidates' parts → copied to clipboard and
 committed with `commitText` (toast: "Copied — tap to paste"). Recording stops
 via Stop button or a 5 min auto-stop. Password fields require a second mic tap
-to confirm.
+to confirm. An Enter button performs the editor action named by
+`imeOptions` (label: Go / Search / Send / Next / Done / Previous, else
+"Enter"); with no action set it commits a newline. Visible in idle and
+error states only.
 
 ## Limits
 

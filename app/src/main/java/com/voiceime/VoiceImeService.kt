@@ -36,6 +36,19 @@ class VoiceImeService : InputMethodService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    companion object {
+        /** Label for the Enter button from the editor's action id. */
+        internal fun enterLabel(actionId: Int): String = when (actionId and EditorInfo.IME_MASK_ACTION) {
+            EditorInfo.IME_ACTION_GO -> "Go"
+            EditorInfo.IME_ACTION_SEARCH -> "Search"
+            EditorInfo.IME_ACTION_SEND -> "Send"
+            EditorInfo.IME_ACTION_NEXT -> "Next"
+            EditorInfo.IME_ACTION_DONE -> "Done"
+            EditorInfo.IME_ACTION_PREVIOUS -> "Previous"
+            else -> "Enter"
+        }
+    }
+
     private var rootView: View? = null
     private var micButton: ImageButton? = null
     private var statusText: TextView? = null
@@ -45,6 +58,8 @@ class VoiceImeService : InputMethodService() {
     private var cancelButton: Button? = null
     private var retryButton: Button? = null
     private var settingsButton: Button? = null
+    private var enterButton: Button? = null
+    private var lastEditorInfo: EditorInfo? = null
 
     private var state: State = State.IDLE
     private var recorder: AudioRecorder? = null
@@ -75,12 +90,14 @@ class VoiceImeService : InputMethodService() {
         cancelButton = view.findViewById(R.id.imeCancel)
         retryButton = view.findViewById(R.id.imeRetry)
         settingsButton = view.findViewById(R.id.imeSettings)
+        enterButton = view.findViewById(R.id.imeEnter)
 
         micButton?.setOnClickListener { onMicTapped() }
         stopButton?.setOnClickListener { finishRecording(upload = true) }
         cancelButton?.setOnClickListener { onCancelTapped() }
         retryButton?.setOnClickListener { retryLast() }
         settingsButton?.setOnClickListener { openSettings() }
+        enterButton?.setOnClickListener { onEnterTapped() }
 
         rootView = view
         renderState()
@@ -89,6 +106,7 @@ class VoiceImeService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        lastEditorInfo = info
         passwordField = isPasswordField(info)
         passwordArmed = false
         renderState()
@@ -96,6 +114,7 @@ class VoiceImeService : InputMethodService() {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
+        lastEditorInfo = null
         cancelWork()
     }
 
@@ -135,6 +154,27 @@ class VoiceImeService : InputMethodService() {
             return
         }
         startRecording()
+    }
+
+    private fun onEnterTapped() {
+        val info = lastEditorInfo
+        val actionId = info?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
+            ?: EditorInfo.IME_ACTION_UNSPECIFIED
+        val ic = currentInputConnection ?: return
+        if (actionId == EditorInfo.IME_ACTION_UNSPECIFIED || actionId == EditorInfo.IME_ACTION_NONE) {
+            try {
+                ic.beginBatchEdit()
+                try {
+                    ic.commitText("\n", 1)
+                } finally {
+                    ic.endBatchEdit()
+                }
+            } catch (e: Exception) {
+                // No connection or commit failed; nothing to fall back to.
+            }
+            return
+        }
+        ic.performEditorAction(actionId)
     }
 
     private fun onCancelTapped() {
@@ -183,11 +223,10 @@ class VoiceImeService : InputMethodService() {
         stopTimer()
         val rec = recorder
         recorder = null
-        val peak = rec?.peakLevel() ?: 0f
-        val wav = try {
-            rec?.stop() ?: ByteArray(0)
+        val (wav, peak) = try {
+            rec?.stop() ?: (ByteArray(0) to 0f)
         } catch (e: Exception) {
-            ByteArray(0)
+            ByteArray(0) to 0f
         }
         if (!upload) {
             lastWav = null
@@ -342,6 +381,13 @@ class VoiceImeService : InputMethodService() {
         cancelButton?.visibility = if (recording || uploading) View.VISIBLE else View.GONE
         retryButton?.visibility = if (error && lastWav != null) View.VISIBLE else View.GONE
         settingsButton?.visibility = if (error) View.VISIBLE else View.GONE
+        val idleish = state == State.IDLE || error
+        enterButton?.visibility = if (idleish) View.VISIBLE else View.GONE
+        if (idleish) {
+            val actionId = lastEditorInfo?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
+                ?: EditorInfo.IME_ACTION_UNSPECIFIED
+            enterButton?.text = enterLabel(actionId)
+        }
         if (state == State.IDLE) {
             statusText?.setText(R.string.ime_status_idle)
             timerText?.text = "0:00"

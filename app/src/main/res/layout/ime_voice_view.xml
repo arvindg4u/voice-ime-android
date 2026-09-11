@@ -74,6 +74,13 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/ime_settings" />
+
+        <Button
+            android:id="@+id/imeEnter"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:contentDescription="@string/ime_enter_description"
+            android:text="@string/ime_enter" />
     </LinearLayout>
 
     <TextView

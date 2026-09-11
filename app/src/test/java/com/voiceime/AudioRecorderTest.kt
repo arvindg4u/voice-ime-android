@@ -1,5 +1,7 @@
 package com.voiceime
 
+import android.test.mock.MockContext
+import android.view.inputmethod.EditorInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -57,5 +59,30 @@ class AudioRecorderTest {
             ((wav[42].toInt() and 0xFF) shl 16) or
             ((wav[43].toInt() and 0xFF) shl 24)
         assertEquals(32000, dataSize)
+    }
+
+    @Test
+    fun `stop returns wav plus post-join peak`() {
+        val rec = AudioRecorder(MockContext())
+        val (wav, peak) = rec.stop()
+        assertEquals(44, wav.size)
+        assertEquals(rec.peakLevel(), peak, 0f)
+        assertTrue(AudioRecorder.isSilent(peak))
+    }
+
+    @Test
+    fun `enterLabel maps action ids to names`() {
+        assertEquals("Go", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_GO))
+        assertEquals("Search", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_SEARCH))
+        assertEquals("Send", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_SEND))
+        assertEquals("Next", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_NEXT))
+        assertEquals("Done", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_DONE))
+        assertEquals("Previous", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_PREVIOUS))
+    }
+
+    @Test
+    fun `enterLabel falls back to Enter for unspecified and none`() {
+        assertEquals("Enter", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_UNSPECIFIED))
+        assertEquals("Enter", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_NONE))
     }
 }

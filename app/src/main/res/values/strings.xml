@@ -11,6 +11,8 @@
     <string name="ime_cancel">Cancel</string>
     <string name="ime_retry">Retry</string>
     <string name="ime_settings">Settings</string>
+    <string name="ime_enter">Enter</string>
+    <string name="ime_enter_description">Send Enter key</string>
     <string name="ime_hint_clips">Speak naturally — up to 5 minutes</string>
     <string name="ime_copied_paste">Copied — tap to paste</string>
     <string name="ime_password_confirm">Password field — tap mic again to confirm</string>

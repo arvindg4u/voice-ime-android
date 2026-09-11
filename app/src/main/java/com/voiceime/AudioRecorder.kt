@@ -255,8 +255,12 @@ class AudioRecorder(
         thread.start()
     }
 
-    /** Stops capture and returns the audio as a WAV byte array (44-byte RIFF header). */
-    fun stop(): ByteArray {
+    /**
+     * Stops capture and returns audio as WAV plus the post-join peak level.
+     * The peak is read only after joining the recording thread, so the last
+     * buffer write happens-before this read (no early/zero peak race).
+     */
+    fun stop(): Pair<ByteArray, Float> {
         recording.set(false)
         try {
             recordingThread?.join(2000)
@@ -264,9 +268,10 @@ class AudioRecorder(
             Thread.currentThread().interrupt()
         }
         recordingThread = null
+        val peak = _peakLevel
         try {
             val pcm = buffer?.toByteArray() ?: ByteArray(0)
-            return pcmToWav(pcm, SAMPLE_RATE)
+            return pcmToWav(pcm, SAMPLE_RATE) to peak
         } finally {
             buffer = null
             releaseRecorder()
