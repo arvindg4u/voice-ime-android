@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.util.Log
+import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
@@ -241,7 +242,7 @@ class VoiceImeService : InputMethodService() {
 
     private fun hapticTap() {
         try {
-            (rootView ?: return).performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+            (rootView ?: return).performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         } catch (e: Exception) {
             // Haptics are best-effort.
         }
@@ -251,9 +252,9 @@ class VoiceImeService : InputMethodService() {
         try {
             val view = rootView ?: return
             if (android.os.Build.VERSION.SDK_INT >= 30) {
-                view.performHapticFeedback(android.os.HapticFeedbackConstants.CONFIRM)
+                view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
             } else {
-                view.performHapticFeedback(android.os.HapticFeedbackConstants.KEYBOARD_TAP)
+                view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
             }
         } catch (e: Exception) {
             // Haptics are best-effort.
