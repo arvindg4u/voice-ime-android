@@ -1,5 +1,6 @@
 package com.voiceime
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,5 +37,20 @@ class AudioRecorderTest {
     @Test
     fun `magnitude increases monotonically with rms`() {
         assertTrue(AudioRecorder.magnitude(0.05f) > AudioRecorder.magnitude(0.01f))
+    }
+
+    @Test
+    fun `testToneWav is a 1s 16kHz mono 16-bit wav`() {
+        val wav = AudioRecorder.testToneWav()
+        assertEquals(44 + 16000 * 2, wav.size)
+        assertEquals('R'.code.toByte(), wav[0])
+        assertEquals('I'.code.toByte(), wav[1])
+        assertEquals('F'.code.toByte(), wav[2])
+        assertEquals('F'.code.toByte(), wav[3])
+        val dataSize = (wav[40].toInt() and 0xFF) or
+            ((wav[41].toInt() and 0xFF) shl 8) or
+            ((wav[42].toInt() and 0xFF) shl 16) or
+            ((wav[43].toInt() and 0xFF) shl 24)
+        assertEquals(32000, dataSize)
     }
 }

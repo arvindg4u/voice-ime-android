@@ -9,7 +9,7 @@ via clipboard + `commitText`.
 
 1. Install the debug APK (built by CI) and open the **Voice IME** app.
 2. Enter **Base URL** (default `https://api.openai.com/v1`), **API key**, and
-   **Model** (an OpenAI audio model, e.g. `gpt-4o-mini-audio-preview`), then Save.
+   **Model** (an OpenAI audio model, e.g. `gpt-audio-1.5`), then Save.
 3. Tap **Enable keyboard**, turn on Voice IME in system input settings, and
    select it as the current keyboard.
 4. Grant microphone permission when prompted.
@@ -27,7 +27,7 @@ or a 60 s auto-stop. Password fields require a second mic tap to confirm.
 ## Limits
 
 - Keep clips under ~20 seconds for best results; hard cap is 60 s.
-- OpenAI audio-capable chat models only (e.g. `gpt-4o-mini-audio-preview`,
+- OpenAI audio-capable chat models only (e.g. `gpt-audio-1.5`,
   `gpt-4o-audio-preview`); plain text models return 404/405-style errors.
 - Debug APK built by CI — not Play-ready, no release signing.
 

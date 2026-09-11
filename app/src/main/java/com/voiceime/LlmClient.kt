@@ -36,6 +36,8 @@ class LlmClient {
         val audioB64 = Base64.encodeToString(wav, Base64.NO_WRAP)
 
         val body = buildRequestJson(model, audioB64)
+        val host = try { java.net.URL(baseUrl).host } catch (e: Exception) { baseUrl }
+        debugLog("transcribe", "POST url=$host model=$model wavBytes=${wav.size} b64Len=${audioB64.length}")
 
         val request = Request.Builder()
             .url(url)
@@ -49,6 +51,7 @@ class LlmClient {
             val response = call.execute()
             response.use { res ->
                 val payload = res.body?.string().orEmpty()
+                debugLog("transcribe", "HTTP ${res.code} payload=${payload.take(2000)}")
                 if (!res.isSuccessful) {
                     throw TranscribeException(mapHttpError(res.code, payload))
                 }
@@ -71,17 +74,15 @@ class LlmClient {
         inFlight?.cancel()
     }
 
+    /** Diagnostic log only: never pass apiKey or audio data here. */
+    private fun debugLog(tag: String, msg: String) {
+        android.util.Log.d("VoiceIme", "$tag: $msg")
+    }
+
     /** Builds the exact POST body for a chat-completions audio transcription request. */
     internal fun buildRequestJson(model: String, audioB64: String): String =
         JSONObject()
             .put("model", model)
-            .put("modalities", JSONArray().put("text").put("audio"))
-            .put(
-                "audio",
-                JSONObject()
-                    .put("voice", "alloy")
-                    .put("format", "wav"),
-            )
             .put(
                 "messages",
                 JSONArray().put(

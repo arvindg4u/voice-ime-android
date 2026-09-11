@@ -12,7 +12,9 @@ import android.media.MicrophoneDirection
 import android.os.Build
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.PI
 import kotlin.math.pow
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
@@ -38,6 +40,66 @@ class AudioRecorder(
          */
         fun magnitude(rms: Float): Float =
             (1.0f - 0.1f.pow(24.0f * rms)).coerceIn(0f, 1f)
+
+        /** 1 s 440 Hz sine at 0.5 amplitude as WAV — for the settings Test button. */
+        internal fun testToneWav(sampleRate: Int = SAMPLE_RATE): ByteArray {
+            val frames = sampleRate
+            val pcm = ByteArray(frames * 2)
+            for (i in 0 until frames) {
+                val sample =
+                    (sin(2.0 * PI * 440.0 * i / sampleRate) * 0.5 * 32767).toInt()
+                pcm[i * 2] = (sample and 0xFF).toByte()
+                pcm[i * 2 + 1] = ((sample ushr 8) and 0xFF).toByte()
+            }
+            return pcmToWav(pcm, sampleRate)
+        }
+
+        internal fun pcmToWav(pcm: ByteArray, sampleRate: Int = SAMPLE_RATE): ByteArray {
+            val totalLen = 44 + pcm.size
+            val out = ByteArray(totalLen)
+            // RIFF header
+            out[0] = 'R'.code.toByte()
+            out[1] = 'I'.code.toByte()
+            out[2] = 'F'.code.toByte()
+            out[3] = 'F'.code.toByte()
+            writeIntLe(out, 4, totalLen - 8)
+            out[8] = 'W'.code.toByte()
+            out[9] = 'A'.code.toByte()
+            out[10] = 'V'.code.toByte()
+            out[11] = 'E'.code.toByte()
+            // fmt chunk
+            out[12] = 'f'.code.toByte()
+            out[13] = 'm'.code.toByte()
+            out[14] = 't'.code.toByte()
+            out[15] = ' '.code.toByte()
+            writeIntLe(out, 16, 16)
+            writeShortLe(out, 20, 1) // PCM
+            writeShortLe(out, 22, 1) // mono
+            writeIntLe(out, 24, sampleRate)
+            writeIntLe(out, 28, sampleRate * 2) // byte rate
+            writeShortLe(out, 32, 2) // block align
+            writeShortLe(out, 34, 16) // bits per sample
+            // data chunk
+            out[36] = 'd'.code.toByte()
+            out[37] = 'a'.code.toByte()
+            out[38] = 't'.code.toByte()
+            out[39] = 'a'.code.toByte()
+            writeIntLe(out, 40, pcm.size)
+            System.arraycopy(pcm, 0, out, 44, pcm.size)
+            return out
+        }
+
+        private fun writeIntLe(out: ByteArray, offset: Int, value: Int) {
+            out[offset] = (value and 0xFF).toByte()
+            out[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+            out[offset + 2] = ((value ushr 16) and 0xFF).toByte()
+            out[offset + 3] = ((value ushr 24) and 0xFF).toByte()
+        }
+
+        private fun writeShortLe(out: ByteArray, offset: Int, value: Int) {
+            out[offset] = (value and 0xFF).toByte()
+            out[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+        }
     }
 
     @Volatile
@@ -204,7 +266,7 @@ class AudioRecorder(
         recordingThread = null
         try {
             val pcm = buffer?.toByteArray() ?: ByteArray(0)
-            return pcmToWav(pcm)
+            return pcmToWav(pcm, SAMPLE_RATE)
         } finally {
             buffer = null
             releaseRecorder()
@@ -257,52 +319,5 @@ class AudioRecorder(
         }
         if (count == 0) return 0f
         return (sqrt(sum / count) / 32768.0).toFloat().coerceIn(0f, 1f)
-    }
-
-    private fun pcmToWav(pcm: ByteArray): ByteArray {
-        val totalLen = 44 + pcm.size
-        val out = ByteArray(totalLen)
-        // RIFF header
-        out[0] = 'R'.code.toByte()
-        out[1] = 'I'.code.toByte()
-        out[2] = 'F'.code.toByte()
-        out[3] = 'F'.code.toByte()
-        writeIntLe(out, 4, totalLen - 8)
-        out[8] = 'W'.code.toByte()
-        out[9] = 'A'.code.toByte()
-        out[10] = 'V'.code.toByte()
-        out[11] = 'E'.code.toByte()
-        // fmt chunk
-        out[12] = 'f'.code.toByte()
-        out[13] = 'm'.code.toByte()
-        out[14] = 't'.code.toByte()
-        out[15] = ' '.code.toByte()
-        writeIntLe(out, 16, 16)
-        writeShortLe(out, 20, 1) // PCM
-        writeShortLe(out, 22, 1) // mono
-        writeIntLe(out, 24, SAMPLE_RATE)
-        writeIntLe(out, 28, SAMPLE_RATE * 2) // byte rate
-        writeShortLe(out, 32, 2) // block align
-        writeShortLe(out, 34, 16) // bits per sample
-        // data chunk
-        out[36] = 'd'.code.toByte()
-        out[37] = 'a'.code.toByte()
-        out[38] = 't'.code.toByte()
-        out[39] = 'a'.code.toByte()
-        writeIntLe(out, 40, pcm.size)
-        System.arraycopy(pcm, 0, out, 44, pcm.size)
-        return out
-    }
-
-    private fun writeIntLe(out: ByteArray, offset: Int, value: Int) {
-        out[offset] = (value and 0xFF).toByte()
-        out[offset + 1] = ((value ushr 8) and 0xFF).toByte()
-        out[offset + 2] = ((value ushr 16) and 0xFF).toByte()
-        out[offset + 3] = ((value ushr 24) and 0xFF).toByte()
-    }
-
-    private fun writeShortLe(out: ByteArray, offset: Int, value: Int) {
-        out[offset] = (value and 0xFF).toByte()
-        out[offset + 1] = ((value ushr 8) and 0xFF).toByte()
     }
 }

@@ -28,7 +28,7 @@
     <string name="settings_api_key">API key</string>
     <string name="settings_api_key_hint">sk-…</string>
     <string name="settings_model">Model</string>
-    <string name="settings_model_hint">OpenAI audio model, e.g. gpt-4o-mini-audio-preview</string>
+    <string name="settings_model_hint">OpenAI audio model, e.g. gpt-audio-1.5</string>
     <string name="settings_save">Save</string>
     <string name="settings_test">Test</string>
     <string name="settings_enable_keyboard">Enable keyboard</string>

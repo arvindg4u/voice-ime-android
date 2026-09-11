@@ -10,7 +10,7 @@ class SettingsStore(context: Context) {
 
     companion object {
         const val DEFAULT_BASE_URL = "https://api.openai.com/v1"
-        const val DEFAULT_MODEL = "gpt-4o-mini-audio-preview"
+        const val DEFAULT_MODEL = "gpt-audio-1.5"
 
         private const val PREFS_NAME = "voice_ime_settings"
         private const val KEY_BASE_URL = "base_url"

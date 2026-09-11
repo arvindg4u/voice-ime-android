@@ -7,7 +7,11 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.google.android.material.textfield.TextInputEditText
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Edits base URL, API key, and model. API key never leaves this screen except real transcribe. */
 class SettingsActivity : AppCompatActivity() {
@@ -16,6 +20,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var baseUrlField: TextInputEditText
     private lateinit var apiKeyField: TextInputEditText
     private lateinit var modelField: TextInputEditText
+    private val llm = LlmClient()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -48,16 +53,34 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     /**
-     * Local sanity check only: verifies key + URL are present.
-     * Never transmits the key anywhere; real transcription happens from the keyboard.
+     * Sends a 1 s 440 Hz test tone to the configured model and shows the
+     * transcript (first 100 chars) or the exact error text.
+     * Runs off the main thread; the button is re-enabled in all paths.
      */
     private fun test() {
+        val testButton = findViewById<Button>(R.id.settingsTest)
         val key = apiKeyField.text?.toString().orEmpty()
         val url = baseUrlField.text?.toString().orEmpty()
         if (key.isEmpty() || url.isEmpty()) {
             Toast.makeText(this, R.string.settings_missing_key, Toast.LENGTH_SHORT).show()
             return
         }
-        Toast.makeText(this, R.string.settings_saved_test_hint, Toast.LENGTH_SHORT).show()
+        val model = modelField.text?.toString().orEmpty().ifEmpty { settings.model }
+        testButton.isEnabled = false
+        lifecycleScope.launch {
+            val message = try {
+                val transcript = withContext(Dispatchers.IO) {
+                    llm.transcribe(AudioRecorder.testToneWav(), url, key, model)
+                }
+                transcript.take(100)
+            } catch (e: TranscribeException) {
+                e.message.orEmpty()
+            } catch (e: Exception) {
+                e.message.orEmpty().ifEmpty { "Transcription failed" }
+            } finally {
+                testButton.isEnabled = true
+            }
+            Toast.makeText(this@SettingsActivity, message, Toast.LENGTH_LONG).show()
+        }
     }
 }

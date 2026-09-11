@@ -2,6 +2,7 @@ package com.voiceime
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -10,19 +11,13 @@ class LlmClientTest {
     private val client = LlmClient()
 
     @Test
-    fun `buildRequestJson includes audio modalities and audio output param`() {
-        val body = client.buildRequestJson("gpt-4o-audio-preview", "QUJDRA==")
+    fun `buildRequestJson is input-only with no modalities or top-level audio`() {
+        val body = client.buildRequestJson("gpt-audio-1.5", "QUJDRA==")
         val json = JSONObject(body)
 
-        val modalities = json.getJSONArray("modalities")
-        assertEquals(2, modalities.length())
-        assertEquals("text", modalities.getString(0))
-        assertEquals("audio", modalities.getString(1))
-        assertTrue(body.contains("\"modalities\":[\"text\",\"audio\"]"))
-
-        val audio = json.getJSONObject("audio")
-        assertEquals("alloy", audio.getString("voice"))
-        assertEquals("wav", audio.getString("format"))
+        assertEquals("gpt-audio-1.5", json.getString("model"))
+        assertFalse("request must not contain modalities", json.has("modalities"))
+        assertFalse("request must not contain top-level audio", json.has("audio"))
 
         val content = json.getJSONArray("messages").getJSONObject(0).getJSONArray("content")
         var foundInputAudio = false
