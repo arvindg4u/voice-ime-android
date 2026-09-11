@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.voiceime.SettingsActivity"
+    android:isDefault="true"
+    android:supportsSwitchingToNextInputMethod="true">
+
+    <subtype
+        android:imeSubtypeMode="voice"
+        android:isAsciiCapable="true" />
+</input-method>

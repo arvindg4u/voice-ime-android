@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:id="@+id/imeStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/ime_status_idle" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <ImageButton
+            android:id="@+id/imeMic"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
+            android:contentDescription="@string/ime_mic_description"
+            android:src="@android:drawable/ic_btn_speak_now" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical"
+            android:paddingStart="12dp">
+
+            <TextView
+                android:id="@+id/imeTimer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="0:00" />
+
+            <ProgressBar
+                android:id="@+id/imeLevel"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:max="100" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/imeStop"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ime_stop" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/imeCancel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ime_cancel" />
+
+        <Button
+            android:id="@+id/imeRetry"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ime_retry" />
+
+        <Button
+            android:id="@+id/imeSettings"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/ime_settings" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/imeHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/ime_hint_clips" />
+</LinearLayout>
