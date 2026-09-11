@@ -49,6 +49,22 @@ class VoiceImeService : InputMethodService() {
             EditorInfo.IME_ACTION_PREVIOUS -> "Previous"
             else -> "Enter"
         }
+
+        /**
+         * Formats elapsed seconds as m:ss without String.format's regex/locale
+         * cost on every UI tick.
+         */
+        internal fun formatElapsed(totalSeconds: Int): String {
+            val seconds = totalSeconds.coerceAtLeast(0)
+            val minutes = seconds / 60
+            val remainder = seconds - minutes * 60
+            return buildString(5) {
+                append(minutes)
+                append(':')
+                if (remainder < 10) append('0')
+                append(remainder)
+            }
+        }
     }
 
     private var rootView: View? = null
@@ -76,6 +92,12 @@ class VoiceImeService : InputMethodService() {
     private var transcribeJob: Job? = null
     private var timerRunnable: Runnable? = null
     private var recordStartMs: Long = 0L
+    private var lastTimerSecond: Int = -1
+    private var lastEnterAction: Int = Int.MIN_VALUE
+    private var actionsRow: View? = null
+    private var capRunnable: Runnable? = null
+    private var blockedHint: String? = null
+    private var blockedHintShown: Boolean = false
     private var lastWav: ByteArray? = null
     private var passwordArmed = false
     private var passwordField = false
@@ -136,6 +158,7 @@ class VoiceImeService : InputMethodService() {
         retryButton = view.findViewById(R.id.imeRetry)
         settingsButton = view.findViewById(R.id.imeSettings)
         enterButton = view.findViewById(R.id.imeEnter)
+        actionsRow = view.findViewById(R.id.imeActionsRow)
 
         micButton?.setOnClickListener { onMicTapped() }
         stopButton?.setOnClickListener { finishRecording(upload = true) }
@@ -183,6 +206,7 @@ class VoiceImeService : InputMethodService() {
         retryButton = null
         settingsButton = null
         enterButton = null
+        actionsRow = null
         rootView = layout
         renderState()
         return layout
@@ -215,6 +239,27 @@ class VoiceImeService : InputMethodService() {
         super.onDestroy()
     }
 
+    private fun hapticTap() {
+        try {
+            (rootView ?: return).performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+        } catch (e: Exception) {
+            // Haptics are best-effort.
+        }
+    }
+
+    private fun hapticConfirm() {
+        try {
+            val view = rootView ?: return
+            if (android.os.Build.VERSION.SDK_INT >= 30) {
+                view.performHapticFeedback(android.os.HapticFeedbackConstants.CONFIRM)
+            } else {
+                view.performHapticFeedback(android.os.HapticFeedbackConstants.KEYBOARD_TAP)
+            }
+        } catch (e: Exception) {
+            // Haptics are best-effort.
+        }
+    }
+
     private fun onMicTapped() {
         if (state == State.RECORDING) {
             finishRecording(upload = true)
@@ -239,6 +284,7 @@ class VoiceImeService : InputMethodService() {
             return
         }
         startRecording()
+        if (state == State.RECORDING) hapticTap()
     }
 
     private fun onEnterTapped() {
@@ -268,6 +314,20 @@ class VoiceImeService : InputMethodService() {
         } else {
             cancelWork()
         }
+        hapticTap()
+    }
+
+    private fun onLevelChanged(level: Float) {
+        // Keep the 500 ms UI callback tiny: cache one string and touch the
+        // status view only when the blocked hint appears or disappears.
+        val blocked = state == State.RECORDING && recorder?.isMicMaybeBlocked() == true
+        waveView?.setAmplitude(level)
+        if (blocked == blockedHintShown) return
+        blockedHintShown = blocked
+        if (blocked) {
+            val hint = blockedHint ?: getString(R.string.ime_mic_blocked_hint).also { blockedHint = it }
+            statusText?.text = hint
+        }
     }
 
     private fun startRecording() {
@@ -276,13 +336,7 @@ class VoiceImeService : InputMethodService() {
             this@VoiceImeService,
             onLevel = { level ->
                 mainHandler.post {
-                    waveView?.setAmplitude(level)
-                    if (state == State.RECORDING && recorder?.isMicMaybeBlocked() == true) {
-                        val hint = getString(R.string.ime_mic_blocked_hint)
-                        if (statusText?.text.toString() != hint) {
-                            statusText?.text = hint
-                        }
-                    }
+                    onLevelChanged(level)
                 }
             },
         )
@@ -296,11 +350,18 @@ class VoiceImeService : InputMethodService() {
         }
         state = State.RECORDING
         recordStartMs = System.currentTimeMillis()
+        lastTimerSecond = -1
+        blockedHintShown = false
         renderState()
         statusText?.setText(R.string.ime_status_recording)
         startTimer()
         // 5 min hard cap in addition to the recorder's own auto-stop.
-        mainHandler.postDelayed({ if (state == State.RECORDING) finishRecording(upload = true) }, 300_000)
+        // Named handle (not an anonymous lambda) so stopTimer() can remove
+        // exactly this callback instead of wiping the whole message queue.
+        capRunnable?.let { mainHandler.removeCallbacks(it) }
+        val cap = Runnable { if (state == State.RECORDING) finishRecording(upload = true) }
+        capRunnable = cap
+        mainHandler.postDelayed(cap, 300_000)
     }
 
     private fun finishRecording(upload: Boolean) {
@@ -430,6 +491,7 @@ class VoiceImeService : InputMethodService() {
         state = State.IDLE
         renderState()
         statusText?.setText(R.string.ime_status_idle)
+        hapticConfirm()
         Toast.makeText(this, R.string.ime_copied_paste, Toast.LENGTH_SHORT).show()
     }
 
@@ -459,6 +521,17 @@ class VoiceImeService : InputMethodService() {
         }
     }
 
+    /**
+     * Sets visibility only when it actually changes. renderState() runs on
+     * every focus/timer-adjacent event; redundant setVisibility calls would
+     * each schedule a full measure/layout pass on the IME window.
+     */
+    private fun setVisible(view: View?, visible: Boolean) {
+        if (view != null && (view.visibility == View.VISIBLE) != visible) {
+            view.visibility = if (visible) View.VISIBLE else View.GONE
+        }
+    }
+
     private fun renderState() {
         statusDot?.backgroundTintList = when (state) {
             State.RECORDING -> dotRecording
@@ -470,17 +543,26 @@ class VoiceImeService : InputMethodService() {
         val uploading = state == State.UPLOADING
         val error = state == State.ERROR
         micButton?.isEnabled = !uploading
-        stopButton?.visibility = if (recording) View.VISIBLE else View.GONE
-        cancelButton?.visibility = if (recording || uploading) View.VISIBLE else View.GONE
-        retryButton?.visibility = if (error && lastWav != null) View.VISIBLE else View.GONE
-        settingsButton?.visibility = if (error) View.VISIBLE else View.GONE
+        setVisible(stopButton, recording)
+        setVisible(cancelButton, recording || uploading)
+        setVisible(retryButton, error && lastWav != null)
+        setVisible(settingsButton, error)
         val idleish = state == State.IDLE || error
-        enterButton?.visibility = if (idleish) View.VISIBLE else View.GONE
+        setVisible(enterButton, idleish)
         if (idleish) {
             val actionId = lastEditorInfo?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
                 ?: EditorInfo.IME_ACTION_UNSPECIFIED
-            enterButton?.text = enterLabel(actionId)
+            if (actionId != lastEnterAction) {
+                lastEnterAction = actionId
+                enterButton?.text = enterLabel(actionId)
+            }
+        } else {
+            lastEnterAction = Int.MIN_VALUE
         }
+        // Collapse the actions row when the error buttons are hidden so the
+        // keyboard stays compact instead of holding an empty strip. The retry
+        // button only shows on error, so `error` covers the whole row.
+        setVisible(actionsRow, error)
         if (state == State.IDLE) {
             statusText?.setText(R.string.ime_status_idle)
             timerText?.text = "0:00"
@@ -492,9 +574,11 @@ class VoiceImeService : InputMethodService() {
         stopTimer()
         val runnable = object : Runnable {
             override fun run() {
-                val elapsed = System.currentTimeMillis() - recordStartMs
-                val seconds = (elapsed / 1000).toInt().coerceAtLeast(0)
-                timerText?.text = "%d:%02d".format(seconds / 60, seconds % 60)
+                val seconds = ((System.currentTimeMillis() - recordStartMs) / 1000).toInt().coerceAtLeast(0)
+                if (seconds != lastTimerSecond) {
+                    lastTimerSecond = seconds
+                    timerText?.text = formatElapsed(seconds)
+                }
                 if (state == State.RECORDING) {
                     mainHandler.postDelayed(this, 500)
                 }
@@ -507,7 +591,8 @@ class VoiceImeService : InputMethodService() {
     private fun stopTimer() {
         timerRunnable?.let { mainHandler.removeCallbacks(it) }
         timerRunnable = null
-        mainHandler.removeCallbacksAndMessages(null)
+        capRunnable?.let { mainHandler.removeCallbacks(it) }
+        capRunnable = null
     }
 
     private fun isPasswordField(info: EditorInfo?): Boolean {

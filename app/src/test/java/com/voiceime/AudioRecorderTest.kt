@@ -86,4 +86,17 @@ class AudioRecorderTest {
         assertEquals("Enter", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_UNSPECIFIED))
         assertEquals("Enter", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_NONE))
     }
+
+    @Test
+    fun `formatElapsed renders minutes and seconds`() {
+        assertEquals("0:00", VoiceImeService.formatElapsed(0))
+        assertEquals("0:05", VoiceImeService.formatElapsed(5))
+        assertEquals("1:00", VoiceImeService.formatElapsed(60))
+        assertEquals("5:00", VoiceImeService.formatElapsed(300))
+    }
+
+    @Test
+    fun `formatElapsed clamps negative input`() {
+        assertEquals("0:00", VoiceImeService.formatElapsed(-7))
+    }
 }

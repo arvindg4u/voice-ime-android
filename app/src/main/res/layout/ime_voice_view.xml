@@ -10,7 +10,7 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:background="@android:color/system_neutral1_900"
-    android:padding="16dp">
+    android:padding="12dp">
 
     <!-- Top status row: state dot + status + timer right -->
     <LinearLayout
@@ -90,6 +90,7 @@
 
     <!-- Second row: text buttons, visibility logic unchanged -->
     <LinearLayout
+        android:id="@+id/imeActionsRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
