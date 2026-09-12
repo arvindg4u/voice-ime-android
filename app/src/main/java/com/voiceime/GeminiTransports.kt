@@ -15,6 +15,9 @@ internal const val BASE_SYSTEM =
 /** Overall bound for one Live session: stream + server turn + close. */
 internal const val LIVE_TIMEOUT_MS = 75_000L
 
+/** Grace after the last transcript fragment: close and commit instead of hanging. */
+internal const val LIVE_GRACE_MS = 8_000L
+
 /** ~100 ms of 16 kHz 16-bit mono PCM per realtimeInput message. */
 internal const val LIVE_CHUNK_BYTES = 3200
 

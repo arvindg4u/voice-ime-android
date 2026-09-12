@@ -268,6 +268,8 @@ class LlmClient {
         val deferred = CompletableDeferred<LiveOutcome>()
         liveResult = deferred
         val transcript = StringBuilder()
+        @Volatile
+        var lastTranscriptMs = 0L
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 try {
@@ -302,6 +304,7 @@ class LlmClient {
                         transcript.setLength(0)
                         for (fragment in fragments) transcript.append(fragment)
                     }
+                    lastTranscriptMs = System.currentTimeMillis()
                 }
                 if (isLiveTurnComplete(text)) {
                     webSocket.close(1000, null)
@@ -344,13 +347,37 @@ class LlmClient {
         }
         val ws = http.newWebSocket(Request.Builder().url("$wsUrl?key=$key").build(), listener)
         inFlightWs = ws
+        // Grace closer: the server often keeps the turn open after the last
+        // interim (no turnComplete). If transcript arrived but nothing new
+        // comes for GRACE_MS, close the socket ourselves — onClosed commits
+        // whatever was heard instead of hanging until LIVE_TIMEOUT_MS.
+        val graceJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            while (true) {
+                kotlinx.coroutines.delay(LIVE_GRACE_MS)
+                val idleFor = System.currentTimeMillis() - lastTranscriptMs
+                if (lastTranscriptMs > 0L && idleFor >= LIVE_GRACE_MS && !deferred.isCompleted) {
+                    try {
+                        ws.close(1000, "grace")
+                    } catch (e: Exception) {
+                        // Socket already gone; onClosed/failure will settle it.
+                    }
+                    return@launch
+                }
+            }
+        }
         try {
             return try {
                 runBlocking(Dispatchers.IO) {
                     withTimeout(LIVE_TIMEOUT_MS) { deferred.await() }
                 }
             } catch (e: TimeoutCancellationException) {
+                // Server never finalized the turn: if interim text arrived,
+                // commit it instead of failing — the words were heard.
+                val interim = transcript.toString().trim()
                 ws.close(1000, "timeout")
+                if (interim.isNotEmpty()) {
+                    return LiveOutcome.Done(interim)
+                }
                 throw TranscribeException("Timed out — try again", e)
             } catch (e: TranscribeException) {
                 throw e
@@ -358,6 +385,11 @@ class LlmClient {
                 throw TranscribeException("cancelled", e)
             }
         } finally {
+            try {
+                graceJob.cancel()
+            } catch (e: Exception) {
+                // Watcher already done; nothing to do.
+            }
             try {
                 ws.close(1000, null)
             } catch (e: Exception) {
