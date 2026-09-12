@@ -42,20 +42,22 @@ class LlmClient {
         .build()
 
     /**
-     * Dedicated socket client for Live sessions. Strips the server's
-     * Sec-WebSocket-Extensions accept so permessage-deflate is never
-     * negotiated: frames go out plain masked text exactly like the proven
-     * raw-socket path (device-tested FINAL). REST traffic keeps using [http].
+     * Dedicated socket client for Live sessions. Removes OkHttp's
+     * permessage-deflate OFFER from the upgrade request so the server never
+     * compresses: frames stay plain masked text exactly like the proven
+     * raw-socket path (device-tested FINAL). Stripping the RESPONSE header
+     * instead would be fatal (server compresses, client won't decompress).
+     * REST traffic keeps using [http].
      */
     private val liveHttp: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(90, TimeUnit.SECONDS)
         .addNetworkInterceptor { chain ->
-            val response = chain.proceed(chain.request())
-            response.newBuilder()
+            val request = chain.request().newBuilder()
                 .removeHeader("Sec-WebSocket-Extensions")
                 .build()
+            chain.proceed(request)
         }
         .build()
 
