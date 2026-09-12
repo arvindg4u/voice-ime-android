@@ -232,6 +232,13 @@ class LlmClient {
                     try {
                         if (finished || failed) return
                         log("live-wire", "handshake code=" + response.code)
+                        log(
+                            "live-wire",
+                            "hs headers=" + response.headers.size +
+                                " accept=" + response.header("Sec-WebSocket-Accept", "none")
+                                    .take(8) +
+                                " t=" + System.currentTimeMillis(),
+                        )
                         // Deflate forensics: if the server accepted
                         // permessage-deflate, our frames go out compressed
                         // and its replies come back compressed.
