@@ -623,7 +623,7 @@ class LlmClientTest {
             while (serverWs.get() == null && System.currentTimeMillis() < openDeadline) {
                 Thread.sleep(20)
             }
-            val ws = serverWs.get() ?: fail("no server socket")
+            val ws = serverWs.get() ?: throw AssertionError("no server socket")
             ws.send("{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"hel\"}}}}")
             ws.send("{\"serverContent\":{\"inputTranscription\":{\"text\":\"hello\"}}}}")
             val msgDeadline = System.currentTimeMillis() + 10_000
