@@ -119,16 +119,16 @@ class ClipboardPolicyTest {
     @Test
     fun `trimBeyondCap keeps pinned and drops oldest unpinned`() {
         val now = 100_000L
-        val entries = listOf(
-            entry("pinned", pinned = true, createdAtMs = 1_000L),
-            entry("new", createdAtMs = 90_000L),
-            entry("mid", createdAtMs = 50_000L),
-            entry("old", createdAtMs = 10_000L),
-        )
-        val pruned = ClipboardPolicy.prune(entries, now, maxUnpinned = 10, ttlMs = 0L)
-        // Re-run with a cap of 2 unpinned: oldest ("old") must go, pinned stays.
-        val capped = ClipboardPolicy.prune(pruned, now, maxUnpinned = 2, ttlMs = 0L)
-        assertEquals(listOf("pinned", "new", "mid"), capped.map { it.text })
+        // 12 unpinned (oldest first by time) + 1 pinned; cap 10 (MIN clamp
+        // forbids smaller caps) must drop the 2 oldest unpinned, keep pinned.
+        val unpinned = (1..12).map { i -> entry("u$i", createdAtMs = i * 1_000L) }
+        val entries = listOf(entry("pinned", pinned = true, createdAtMs = 1_000L)) + unpinned
+        val capped = ClipboardPolicy.prune(entries, now, maxUnpinned = 10, ttlMs = 0L)
+        assertEquals(11, capped.size)
+        assertTrue(capped.any { it.text == "pinned" })
+        assertFalse(capped.any { it.text == "u1" })
+        assertFalse(capped.any { it.text == "u2" })
+        assertTrue(capped.any { it.text == "u12" })
     }
 
     @Test

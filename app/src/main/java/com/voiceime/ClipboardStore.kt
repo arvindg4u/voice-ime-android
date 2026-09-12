@@ -1,9 +1,7 @@
 package com.voiceime
 
 import android.content.Context
-import android.util.AtomicFile
 import java.io.File
-import java.io.FileOutputStream
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -11,12 +9,16 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Offline text-only clipboard history backed by an AtomicFile JSON store in
+ * Offline text-only clipboard history backed by a plain-file JSON store in
  * the app-private no-backup dir (excluded from backup; allowBackup=false
- * already set). Writes go through a .tmp swap with a .bak fallback read.
+ * already set). Writes go to a .tmp swap file then atomically rename onto
+ * the primary, with a .bak copy of the last-good payload as fallback read.
  *
- * Pattern origin: FUTO android-keyboard clipboard history (AtomicFile +
- * backup/prune/pin-exemption) — reimplemented here from scratch.
+ * Deliberately NOT android.util.AtomicFile: framework classes are stubbed
+ * under JVM unit tests (isReturnDefaultValues), so plain java.io keeps the
+ * store fully testable. Pattern origin: FUTO android-keyboard clipboard
+ * history (AtomicFile + backup/prune/pin-exemption) — reimplemented here
+ * from scratch.
  *
  * All IO runs on the caller's thread; callers must use Dispatchers.IO. The
  * in-memory snapshot is a CopyOnWriteArrayList so UI threads read without
@@ -35,8 +37,9 @@ class ClipboardStore private constructor(private val dir: File) {
         fun forDirectory(dir: File): ClipboardStore = ClipboardStore(dir)
     }
 
-    private val primary = AtomicFile(File(dir, FILE_NAME))
+    private val primary = File(dir, FILE_NAME)
     private val backup = File(dir, "$FILE_NAME.bak")
+    private val swap = File(dir, "$FILE_NAME.tmp")
 
     private val entries = CopyOnWriteArrayList<ClipboardEntry>()
 
@@ -138,23 +141,20 @@ class ClipboardStore private constructor(private val dir: File) {
             )
         }
         val payload = array.toString().toByteArray(Charsets.UTF_8)
-        // Keep the last-good copy before overwriting the primary.
         try {
-            if (primary.baseFile.exists()) {
-                primary.baseFile.copyTo(backup, overwrite = true)
+            // Swap-write then atomic rename; keep last-good .bak first.
+            if (primary.exists()) {
+                primary.copyTo(backup, overwrite = true)
+            }
+            swap.writeBytes(payload)
+            if (!swap.renameTo(primary)) {
+                // Rename failed (e.g. cross-volume): fall back to direct write.
+                swap.copyTo(primary, overwrite = true)
+                swap.delete()
             }
         } catch (e: Exception) {
-            // Backup is best-effort; the atomic write below still applies.
-        }
-        var out: FileOutputStream? = null
-        try {
-            out = primary.startWrite()
-            out.write(payload)
-            primary.finishWrite(out)
-            out = null
-        } catch (e: Exception) {
             try {
-                if (out != null) primary.failWrite(out)
+                swap.delete()
             } catch (ignored: Exception) {
             }
         }
@@ -162,15 +162,13 @@ class ClipboardStore private constructor(private val dir: File) {
 
     private fun readFile(): List<ClipboardEntry>? {
         val parsed = try {
-            if (!primary.baseFile.exists()) return null
-            parse(primary.openRead().bufferedReader(Charsets.UTF_8).use { it.readText() })
+            if (!primary.exists()) null else parse(primary.readText(Charsets.UTF_8))
         } catch (e: Exception) {
             null
         }
         if (parsed != null) return parsed
         return try {
-            if (!backup.exists()) return null
-            parse(backup.readText(Charsets.UTF_8))
+            if (!backup.exists()) null else parse(backup.readText(Charsets.UTF_8))
         } catch (e: Exception) {
             null
         }
@@ -208,6 +206,10 @@ class ClipboardStore private constructor(private val dir: File) {
         }
         try {
             if (backup.exists()) backup.delete()
+        } catch (e: Exception) {
+        }
+        try {
+            if (swap.exists()) swap.delete()
         } catch (e: Exception) {
         }
     }

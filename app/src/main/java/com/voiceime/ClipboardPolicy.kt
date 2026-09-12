@@ -95,7 +95,7 @@ object ClipboardPolicy {
     /**
      * Prune pass: drop expired unpinned entries, then FIFO-trim oldest
      * unpinned beyond [maxUnpinned] and oldest pinned beyond [maxPinned].
-     * Order (newest first) is preserved.
+     * Result order is newest first.
      */
     fun prune(
         entries: List<ClipboardEntry>,
@@ -110,14 +110,11 @@ object ClipboardPolicy {
         } else {
             entries.toList()
         }
+        // FIFO by age: newest first, then cap each group.
+        kept = kept.sortedByDescending { it.createdAtMs }
         val pinned = kept.filter { it.isPinned }.take(maxPinned.coerceAtLeast(0))
         val unpinned = kept.filter { !it.isPinned }.take(cap)
-        val pinnedIds = pinned.map { it.id }.toSet()
-        kept = kept.filter { it.isPinned && it.id in pinnedIds || !it.isPinned }
-        // Rebuild in original relative order: pinned (capped) + unpinned (capped).
-        val pinnedKept = pinned.toSet()
-        val unpinnedKept = unpinned.toSet()
-        return kept.filter { it in pinnedKept || it in unpinnedKept }
+        return pinned + unpinned
     }
 
     /**
