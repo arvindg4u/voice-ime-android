@@ -4,6 +4,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import okhttp3.Call
@@ -268,8 +270,7 @@ class LlmClient {
         val deferred = CompletableDeferred<LiveOutcome>()
         liveResult = deferred
         val transcript = StringBuilder()
-        @Volatile
-        var lastTranscriptMs = 0L
+        val lastTranscriptMs = java.util.concurrent.atomic.AtomicLong(0L)
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 try {
@@ -304,7 +305,7 @@ class LlmClient {
                         transcript.setLength(0)
                         for (fragment in fragments) transcript.append(fragment)
                     }
-                    lastTranscriptMs = System.currentTimeMillis()
+                    lastTranscriptMs.set(System.currentTimeMillis())
                 }
                 if (isLiveTurnComplete(text)) {
                     webSocket.close(1000, null)
@@ -353,9 +354,10 @@ class LlmClient {
         // whatever was heard instead of hanging until LIVE_TIMEOUT_MS.
         val graceJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
             while (true) {
-                kotlinx.coroutines.delay(LIVE_GRACE_MS)
-                val idleFor = System.currentTimeMillis() - lastTranscriptMs
-                if (lastTranscriptMs > 0L && idleFor >= LIVE_GRACE_MS && !deferred.isCompleted) {
+                delay(LIVE_GRACE_MS)
+                val last = lastTranscriptMs.get()
+                val idleFor = System.currentTimeMillis() - last
+                if (last > 0L && idleFor >= LIVE_GRACE_MS && !deferred.isCompleted) {
                     try {
                         ws.close(1000, "grace")
                     } catch (e: Exception) {
