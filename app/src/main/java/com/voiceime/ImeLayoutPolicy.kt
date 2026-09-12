@@ -64,6 +64,14 @@ object ImeLayoutPolicy {
     fun fullscreenMode(): Boolean = false
 
     /**
+     * Delay until the next whole-second boundary of the recording clock:
+     * 1000 minus the millisecond part of [elapsedMs]. Keeps the timer
+     * runnable posting once per displayed second instead of polling at a
+     * fixed rate. Negative elapsed (clock moved) means the boundary is now.
+     */
+    fun nextTimerDelayMs(elapsedMs: Long): Long = 1000L - (elapsedMs.coerceAtLeast(0L) % 1000L)
+
+    /**
      * Actions row: GONE unless at least one child button is visible.
      * The Cancel button shows mid-record/upload while Retry/Settings show on
      * error, so the row must follow child visibility — never state directly —

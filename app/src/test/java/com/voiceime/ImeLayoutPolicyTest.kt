@@ -71,4 +71,16 @@ class ImeLayoutPolicyTest {
         val empty = ImeLayoutPolicy.barGeometry(0f, 48, 10f, 0.55f)
         assertEquals(0f, empty.slotW, 0.001f)
     }
+
+    @Test
+    fun `next timer delay lands on second boundaries`() {
+        // Start of a second: full interval.
+        assertEquals(1000L, ImeLayoutPolicy.nextTimerDelayMs(0L))
+        assertEquals(1000L, ImeLayoutPolicy.nextTimerDelayMs(2000L))
+        // Mid-second: remainder to the boundary.
+        assertEquals(750L, ImeLayoutPolicy.nextTimerDelayMs(250L))
+        assertEquals(1L, ImeLayoutPolicy.nextTimerDelayMs(1999L))
+        // Negative elapsed (clock moved): fire now.
+        assertEquals(1000L, ImeLayoutPolicy.nextTimerDelayMs(-50L))
+    }
 }

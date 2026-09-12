@@ -873,13 +873,14 @@ class VoiceImeService : InputMethodService() {
         stopTimer()
         val runnable = object : Runnable {
             override fun run() {
-                val seconds = ((System.currentTimeMillis() - recordStartMs) / 1000).toInt().coerceAtLeast(0)
+                val now = System.currentTimeMillis()
+                val seconds = ((now - recordStartMs) / 1000).toInt().coerceAtLeast(0)
                 if (seconds != lastTimerSecond) {
                     lastTimerSecond = seconds
                     timerText?.text = formatElapsed(seconds)
                 }
                 if (state == State.RECORDING) {
-                    mainHandler.postDelayed(this, 500)
+                    mainHandler.postDelayed(this, ImeLayoutPolicy.nextTimerDelayMs(now - recordStartMs))
                 }
             }
         }
