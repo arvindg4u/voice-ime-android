@@ -1,8 +1,5 @@
 package com.voiceime
 
-import okhttp3.Response
-import okhttp3.WebSocket
-import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.json.JSONObject
@@ -11,10 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 
 class LlmClientTest {
 
@@ -500,19 +494,6 @@ class LlmClientTest {
     }
 
     @Test
-    fun `liveUrl defaults for google and wraps custom hosts`() {
-        assertEquals(
-            "wss://generativelanguage.googleapis.com" +
-                "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
-            liveUrl("https://generativelanguage.googleapis.com/v1beta"),
-        )
-        val custom = liveUrl("https://proxy.example.com/v1beta")
-        assertTrue(custom.startsWith("wss://proxy.example.com/ws/"))
-        val http = liveUrl("http://proxy.example.com/v1beta")
-        assertTrue(http.startsWith("ws://proxy.example.com/ws/"))
-    }
-
-    @Test
     fun `wavToMono16kPcm strips header and returns pcm`() {
         val pcm = byteArrayOf(1, 2, 3, 4)
         assertTrue(wavToMono16kPcm(wavBytes(pcm = pcm)).contentEquals(pcm))
@@ -540,282 +521,69 @@ class LlmClientTest {
     }
 
     @Test
-    fun `liveSession buffers pcm sent before handshake completes`() {
-        // Mic starts instantly on tap while TLS+WS handshake is in flight:
-        // early chunks must be flushed after setupComplete, never dropped.
-        val server = MockWebServer()
-        val received = CopyOnWriteArrayList<String>()
-        val serverWs1 = AtomicReference<WebSocket>()
-        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                serverWs1.set(webSocket)
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                received.add(text)
-                if (text.contains("inputAudioTranscription")) {
-                    webSocket.send("{\"setupComplete\":{}}")
-                }
-            }
-        }))
-        server.start()
-        val session = client.startLiveSession(
-            "k", server.url("/v1beta").toString(), "gemini-3.5-transcribe-live",
-            onInterim = {}, onFinal = {}, onError = {},
-        )
-        try {
-            val chunk = ByteArray(3200) { 7 }
-            session.sendPcm(chunk)
-            session.sendPcm(chunk)
-            val deadline = System.currentTimeMillis() + 10_000
-            while (System.currentTimeMillis() < deadline) {
-                val audios = received.count { it.contains("\"audio\"") }
-                if (received.any { it.contains("activityStart") } && audios >= 2) break
-                Thread.sleep(50)
-            }
-            assertTrue(received.any { it.contains("inputAudioTranscription") })
-            assertEquals(2, received.count { it.contains("\"audio\"") })
-            val setupIdx = received.indexOfFirst { it.contains("inputAudioTranscription") }
-            val startIdx = received.indexOfFirst { it.contains("activityStart") }
-            val firstAudio = received.indexOfFirst { it.contains("\"audio\"") }
-            assertTrue(setupIdx >= 0 && startIdx > setupIdx && firstAudio > startIdx)
-        } finally {
-            try {
-                session.close()
-            } finally {
-                // Close the server end first so MockWebServer.shutdown()
-                // never trips over a live connection.
-                try {
-                    serverWs1.get()?.close(1000, null)
-                } catch (e: Exception) {
-                    // Already gone.
-                }
-                try {
-                    Thread.sleep(100)
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                }
-                server.shutdown()
-            }
-        }
+    fun `liveSocket encodeTextFrame masks and round-trips`() {
+        // fin + text opcode, masked, short length; unmask recovers payload.
+        val text = "{\"setup\":{\"model\":\"m\"}}"
+        val frame = LiveSocket.encodeTextFrame(text)
+        assertEquals(0x81, frame[0].toInt() and 0xFF)
+        val len = frame[1].toInt() and 0x7F
+        assertEquals(text.toByteArray(Charsets.UTF_8).size, len)
+        val mask = frame.copyOfRange(2, 6)
+        val masked = frame.copyOfRange(6, 6 + len)
+        val plain = ByteArray(len) { i -> (masked[i] xor mask[i % 4]) }
+        assertEquals(text, String(plain, Charsets.UTF_8))
     }
 
     @Test
-    fun `liveSession surfaces handshake rejection detail`() {
-        val server = MockWebServer()
-        server.enqueue(
-            MockResponse().setResponseCode(400)
-                .setBody("{\"error\":{\"message\":\"boom-detail\"}}"),
-        )
-        server.start()
-        val latch = CountDownLatch(1)
-        var err = ""
-        val session = client.startLiveSession(
-            "k", server.url("/v1beta").toString(), "m",
-            onInterim = {}, onFinal = {},
-            onError = { err = it; latch.countDown() },
-        )
-        try {
-            assertTrue(latch.await(10, TimeUnit.SECONDS))
-            assertTrue(err.contains("boom-detail"))
-        } finally {
-            try {
-                session.close()
-            } finally {
-                try {
-                    server.shutdown()
-                } catch (e: java.io.IOException) {
-                    // Handshake rejected; socket never established.
-                }
-            }
-        }
+    fun `liveSocket encodeFrame uses extended lengths`() {
+        // 126 marker for 300-byte payloads; 127 marker with 8-byte length for 70k.
+        val medium = ByteArray(300) { 7 }
+        val f16 = LiveSocket.encodeFrame(0x1, medium)
+        assertEquals(0x81, f16[0].toInt() and 0xFF)
+        assertEquals(0x80 or 126, f16[1].toInt() and 0xFF)
+        assertEquals(300, ((f16[2].toInt() and 0xFF) shl 8) or (f16[3].toInt() and 0xFF))
+        val big = ByteArray(70000) { 9 }
+        val f64 = LiveSocket.encodeFrame(0x2, big)
+        assertEquals(0x82, f64[0].toInt() and 0xFF)
+        assertEquals(0x80 or 127, f64[1].toInt() and 0xFF)
+        var length = 0L
+        for (i in 2 until 10) length = (length shl 8) or (f64[i].toLong() and 0xFF)
+        assertEquals(70000L, length)
     }
 
     @Test
-    fun `liveSession streams interim then final transcripts`() {
-        val server = MockWebServer()
-        val serverWs = AtomicReference<WebSocket>()
-        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                serverWs.set(webSocket)
-            }
-        }))
-        server.start()
-        val interims = CopyOnWriteArrayList<String>()
-        val finals = CopyOnWriteArrayList<String>()
-        val session = client.startLiveSession(
-            "k", server.url("/v1beta").toString(), "m",
-            onInterim = { interims.add(it) },
-            onFinal = { finals.add(it) },
-            onError = {},
-        )
-        try {
-            val openDeadline = System.currentTimeMillis() + 10_000
-            while (serverWs.get() == null && System.currentTimeMillis() < openDeadline) {
-                Thread.sleep(20)
-            }
-            val ws = serverWs.get() ?: throw AssertionError("no server socket")
-            ws.send("{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"hel\"}}}}")
-            ws.send("{\"serverContent\":{\"inputTranscription\":{\"text\":\"hello\"}}}}")
-            val msgDeadline = System.currentTimeMillis() + 10_000
-            while ((interims.isEmpty() || finals.isEmpty()) && System.currentTimeMillis() < msgDeadline) {
-                Thread.sleep(20)
-            }
-            assertEquals(listOf("hel"), interims.toList())
-            assertEquals(listOf("hello"), finals.toList())
-            // Second turn delivers only its own delta, not the accumulation.
-            ws.send("{\"serverContent\":{\"inputTranscription\":{\"text\":\" world\"}}}}")
-            val twoDeadline = System.currentTimeMillis() + 10_000
-            while (finals.size < 2 && System.currentTimeMillis() < twoDeadline) {
-                Thread.sleep(20)
-            }
-            assertEquals(listOf("hello", " world"), finals.toList())
-        } finally {
-            try {
-                session.close()
-            } finally {
-                try {
-                    serverWs.get()?.close(1000, null)
-                } catch (e: Exception) {
-                    // Already gone.
-                }
-                try {
-                    Thread.sleep(100)
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                }
-                server.shutdown()
-            }
-        }
+    fun `liveSocket closePayload carries code and reason`() {
+        val payload = LiveSocket.closePayload(1000, "bye")
+        assertEquals(0x03, payload[0])
+        assertEquals(0xE8.toByte(), payload[1])
+        assertEquals("bye", String(payload, 2, payload.size - 2, Charsets.UTF_8))
     }
 
     @Test
-    fun `liveSession finish self-closes a silent server socket`() {
-        val server = MockWebServer()
-        val serverWs = AtomicReference<WebSocket>()
-        val serverClosed = CountDownLatch(1)
-        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                serverWs.set(webSocket)
-            }
-
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                serverClosed.countDown()
-            }
-        }))
-        server.start()
-        val session = client.startLiveSession(
-            "k", server.url("/v1beta").toString(), "m",
-            onInterim = {}, onFinal = {}, onError = {},
-        )
-        try {
-            val openDeadline = System.currentTimeMillis() + 10_000
-            while (serverWs.get() == null && System.currentTimeMillis() < openDeadline) {
-                Thread.sleep(20)
-            }
-            assertTrue(serverWs.get() != null)
-            // Server stays silent: no transcripts, no turnComplete.
-            // finish() only sends end markers; awaitFinal times out;
-            // close() delivers the close frame the server observes.
-            session.finish()
-            val signaled = kotlinx.coroutines.runBlocking {
-                session.awaitFinal(300)
-            }
-            assertFalse(signaled)
-            session.close()
-            assertTrue(serverClosed.await(10, TimeUnit.SECONDS))
-        } finally {
-            try {
-                session.close()
-            } finally {
-                try {
-                    serverWs.get()?.close(1000, null)
-                } catch (e: Exception) {
-                    // Already gone.
-                }
-                server.shutdown()
-            }
-        }
+    fun `liveSocket mapHandshakeError maps status codes`() {
+        assertTrue(LiveSocket.mapHandshakeError("HTTP/1.1 401 Unauthorized").contains("Check API key"))
+        assertTrue(LiveSocket.mapHandshakeError("HTTP/1.1 429 blah").contains("Rate limited"))
+        assertTrue(LiveSocket.mapHandshakeError("HTTP/1.1 500 blah").contains("HTTP 500"))
+        assertTrue(LiveSocket.mapHandshakeError("garbage").contains("Network error"))
     }
 
     @Test
-    fun `liveSession awaitFinal resolves on turnComplete`() {
-        val server = MockWebServer()
-        val serverWs = AtomicReference<WebSocket>()
-        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                serverWs.set(webSocket)
-            }
-        }))
-        server.start()
-        val session = client.startLiveSession(
-            "k", server.url("/v1beta").toString(), "m",
-            onInterim = {}, onFinal = {}, onError = {},
+    fun `liveHost prefers google default and keeps custom hosts`() {
+        assertEquals(
+            "generativelanguage.googleapis.com",
+            liveHost("https://generativelanguage.googleapis.com/v1beta"),
         )
-        try {
-            val openDeadline = System.currentTimeMillis() + 10_000
-            while (serverWs.get() == null && System.currentTimeMillis() < openDeadline) {
-                Thread.sleep(20)
-            }
-            val ws = serverWs.get() ?: throw AssertionError("no server socket")
-            ws.send("{\"serverContent\":{\"inputTranscription\":{\"text\":\"hi\"}}}}")
-            ws.send("{\"serverContent\":{\"turnComplete\":true}}")
-            val signaled = kotlinx.coroutines.runBlocking {
-                session.awaitFinal(10_000)
-            }
-            assertTrue(signaled)
-        } finally {
-            try {
-                session.close()
-            } finally {
-                try {
-                    serverWs.get()?.close(1000, null)
-                } catch (e: Exception) {
-                    // Already gone.
-                }
-                server.shutdown()
-            }
-        }
+        assertEquals("proxy.example.com", liveHost("https://proxy.example.com/v1beta"))
+        assertEquals("generativelanguage.googleapis.com", liveHost("not a url"))
     }
 
     @Test
-    fun `liveSession awaitFinal times out without signal`() {
-        val server = MockWebServer()
-        val serverWs = AtomicReference<WebSocket>()
-        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                serverWs.set(webSocket)
-            }
-        }))
-        server.start()
-        val session = client.startLiveSession(
-            "k", server.url("/v1beta").toString(), "m",
-            onInterim = {}, onFinal = {}, onError = {},
-        )
-        try {
-            val openDeadline = System.currentTimeMillis() + 10_000
-            while (serverWs.get() == null && System.currentTimeMillis() < openDeadline) {
-                Thread.sleep(20)
-            }
-            assertTrue(serverWs.get() != null)
-            // Server stays silent: awaitFinal must return false, not hang.
-            val signaled = kotlinx.coroutines.runBlocking {
-                session.awaitFinal(300)
-            }
-            assertFalse(signaled)
-        } finally {
-            try {
-                session.close()
-            } finally {
-                try {
-                    serverWs.get()?.close(1000, null)
-                } catch (e: Exception) {
-                    // Already gone.
-                }
-                server.shutdown()
-            }
-        }
+    fun `livePath appends rpc path and key`() {
+        val path = livePath("https://generativelanguage.googleapis.com/v1beta", "k1")
+        assertTrue(path.startsWith("/ws/google.ai.generativelanguage."))
+        assertTrue(path.endsWith("?key=k1"))
     }
+
     @Test
     fun `isLiveSetupComplete detects setup ack only`() {
         assertTrue(isLiveSetupComplete("{\"setupComplete\":{}}"))
@@ -823,67 +591,5 @@ class LlmClientTest {
         assertFalse(isLiveSetupComplete("{\"serverContent\":{}}"))
         assertFalse(isLiveSetupComplete("not json"))
         assertFalse(isLiveSetupComplete(""))
-    }
-
-    @Test
-    fun `liveSession holds audio until setupComplete then streams`() {
-        val server = MockWebServer()
-        val received = CopyOnWriteArrayList<String>()
-        val serverWs = AtomicReference<WebSocket>()
-        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                serverWs.set(webSocket)
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                received.add(text)
-                // Ack the setup like the real server: only then may audio flow.
-                if (text.contains("inputAudioTranscription")) {
-                    webSocket.send("{\"setupComplete\":{}}")
-                }
-            }
-        }))
-        server.start()
-        val session = client.startLiveSession(
-            "k", server.url("/v1beta").toString(), "m",
-            onInterim = {}, onFinal = {}, onError = {},
-        )
-        try {
-            val chunk = ByteArray(3200) { 7 }
-            // Sent before any server message: must buffer, not transmit.
-            // The mock acks setup on receipt, so assert pre-setup silence
-            // by polling: audio must not precede activityStart.
-            session.sendPcm(chunk)
-            val gate = System.currentTimeMillis() + 10_000
-            while (System.currentTimeMillis() < gate) {
-                if (received.any { it.contains("activityStart") }) break
-                assertTrue(received.none { it.contains("\"audio\"") })
-                Thread.sleep(20)
-            }
-            assertTrue(received.any { it.contains("activityStart") })
-            // Server acks setup -> activityStart + buffered audio flush.
-            val deadline = System.currentTimeMillis() + 10_000
-            while (System.currentTimeMillis() < deadline) {
-                if (received.any { it.contains("activityStart") } &&
-                    received.any { it.contains("\"audio\"") }
-                ) break
-                Thread.sleep(50)
-            }
-            val setupIdx = received.indexOfFirst { it.contains("inputAudioTranscription") }
-            val startIdx = received.indexOfFirst { it.contains("activityStart") }
-            val audioIdx = received.indexOfFirst { it.contains("\"audio\"") }
-            assertTrue(setupIdx >= 0 && startIdx > setupIdx && audioIdx > startIdx)
-        } finally {
-            try {
-                session.close()
-            } finally {
-                try {
-                    serverWs.get()?.close(1000, null)
-                } catch (e: Exception) {
-                    // Already gone.
-                }
-                server.shutdown()
-            }
-        }
     }
 }

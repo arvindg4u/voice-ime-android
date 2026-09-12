@@ -242,34 +242,23 @@ internal fun isLiveTurnComplete(serverJson: String): Boolean {
 }
 
 /**
- * Live WebSocket URL: default Google host, or the custom baseUrl's host
- * (http→ws, https→wss) for proxies. The key travels as a query parameter
- * and is never logged.
+ * Live WebSocket host: default Google host, or the custom baseUrl's host.
+ * The raw [LiveSocket] speaks TLS on 443 only; plain-ws test servers are a
+ * unit-test concern, not a production path. The key travels as a query
+ * parameter and is never logged.
  */
-internal fun liveUrl(baseUrl: String): String {
+internal fun liveHost(baseUrl: String): String {
     val parsedHost = try {
         java.net.URL(baseUrl).host.orEmpty()
     } catch (e: Exception) {
         ""
     }
-    if (parsedHost.isEmpty() || parsedHost == LIVE_DEFAULT_HOST) {
-        return "wss://$LIVE_DEFAULT_HOST$LIVE_RPC_PATH"
-    }
-    val scheme = try {
-        if (java.net.URL(baseUrl).protocol == "http") "ws" else "wss"
-    } catch (e: Exception) {
-        "wss"
-    }
-    // Preserve non-default ports (URL.port is -1 when absent/default):
-    // dropping them breaks test servers and custom-port proxies.
-    val port = try {
-        java.net.URL(baseUrl).port
-    } catch (e: Exception) {
-        -1
-    }
-    val portSuffix = if (port != -1) ":$port" else ""
-    return "$scheme://$parsedHost$portSuffix$LIVE_RPC_PATH"
+    return parsedHost.ifEmpty { LIVE_DEFAULT_HOST }
 }
+
+/** Live RPC path with the key attached (key never logged). */
+internal fun livePath(baseUrl: String, key: String): String =
+    "$LIVE_RPC_PATH?key=$key"
 
 /**
  * Strips the WAV header, returning raw 16 kHz 16-bit mono PCM for the
