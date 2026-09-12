@@ -851,9 +851,16 @@ class LlmClientTest {
         try {
             val chunk = ByteArray(3200) { 7 }
             // Sent before any server message: must buffer, not transmit.
+            // The mock acks setup on receipt, so assert pre-setup silence
+            // by polling: audio must not precede activityStart.
             session.sendPcm(chunk)
-            Thread.sleep(500)
-            assertTrue(received.none { it.contains("\"audio\"") })
+            val gate = System.currentTimeMillis() + 10_000
+            while (System.currentTimeMillis() < gate) {
+                if (received.any { it.contains("activityStart") }) break
+                assertTrue(received.none { it.contains("\"audio\"") })
+                Thread.sleep(20)
+            }
+            assertTrue(received.any { it.contains("activityStart") })
             // Server acks setup -> activityStart + buffered audio flush.
             val deadline = System.currentTimeMillis() + 10_000
             while (System.currentTimeMillis() < deadline) {
