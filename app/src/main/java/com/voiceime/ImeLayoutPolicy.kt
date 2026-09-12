@@ -63,6 +63,15 @@ object ImeLayoutPolicy {
     /** Fullscreen extract UI: always off so large-screen landscape keeps app context. */
     fun fullscreenMode(): Boolean = false
 
+    /**
+     * Actions row: GONE unless at least one child button is visible.
+     * The Cancel button shows mid-record/upload while Retry/Settings show on
+     * error, so the row must follow child visibility — never state directly —
+     * or a visible child ends up trapped inside a GONE parent.
+     */
+    fun actionsRowVisible(cancelVisible: Boolean, retryVisible: Boolean, settingsVisible: Boolean): Boolean =
+        cancelVisible || retryVisible || settingsVisible
+
     /** Waveform bar geometry: bars capped at [maxBarPx] and centered. */
     data class BarGeometry(val slotW: Float, val barW: Float, val startX: Float)
 

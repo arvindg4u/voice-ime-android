@@ -836,9 +836,20 @@ class VoiceImeService : InputMethodService() {
         val error = state == State.ERROR
         micButton?.isEnabled = !uploading
         setVisible(stopButton, recording)
-        setVisible(cancelButton, recording || uploading)
-        setVisible(retryButton, error && lastWav != null)
-        setVisible(settingsButton, error)
+        // Collapse the actions row unless a child is actually visible:
+        // Cancel shows mid-record/upload while Retry/Settings show on error,
+        // so the row follows child visibility — never state directly — or a
+        // visible Cancel ends up trapped inside a GONE row. Idle stays compact.
+        val showCancel = recording || uploading
+        val showRetry = error && lastWav != null
+        val showSettings = error
+        setVisible(cancelButton, showCancel)
+        setVisible(retryButton, showRetry)
+        setVisible(settingsButton, showSettings)
+        setVisible(
+            actionsRow,
+            ImeLayoutPolicy.actionsRowVisible(showCancel, showRetry, showSettings),
+        )
         val idleish = state == State.IDLE || error
         setVisible(enterButton, idleish)
         if (idleish) {
@@ -851,10 +862,6 @@ class VoiceImeService : InputMethodService() {
         } else {
             lastEnterAction = Int.MIN_VALUE
         }
-        // Collapse the actions row when the error buttons are hidden so the
-        // keyboard stays compact instead of holding an empty strip. The retry
-        // button only shows on error, so `error` covers the whole row.
-        setVisible(actionsRow, error)
         if (state == State.IDLE) {
             statusText?.setText(R.string.ime_status_idle)
             timerText?.text = "0:00"

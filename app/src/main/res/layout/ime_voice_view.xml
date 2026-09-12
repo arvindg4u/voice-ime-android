@@ -103,13 +103,16 @@
             android:textSize="@dimen/voice_action_text_size" />
     </LinearLayout>
 
-    <!-- Second row: text buttons, visibility logic unchanged -->
+    <!-- Second row: text buttons. GONE unless a child is visible (Cancel
+         mid-record/upload, Retry/Settings on error); renderState() follows
+         child visibility via ImeLayoutPolicy so idle stays compact. -->
     <LinearLayout
         android:id="@+id/imeActionsRow"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="2dp"
-        android:orientation="horizontal">
+        android:orientation="horizontal"
+        android:visibility="gone">
 
         <Button
             android:id="@+id/imeCancel"
@@ -141,6 +144,9 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:singleLine="true"
         android:text="@string/ime_hint_clips"
         android:textColor="@android:color/system_neutral1_300"
         android:textSize="@dimen/voice_hint_text_size" />

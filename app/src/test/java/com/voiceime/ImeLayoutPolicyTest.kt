@@ -41,6 +41,17 @@ class ImeLayoutPolicyTest {
     }
 
     @Test
+    fun `actions row follows child visibility`() {
+        // Cancel alone keeps the row up mid-record/upload.
+        assertTrue(ImeLayoutPolicy.actionsRowVisible(true, false, false))
+        // Error children keep the row up.
+        assertTrue(ImeLayoutPolicy.actionsRowVisible(false, true, false))
+        assertTrue(ImeLayoutPolicy.actionsRowVisible(false, false, true))
+        // Idle: all children hidden, row collapses.
+        assertFalse(ImeLayoutPolicy.actionsRowVisible(false, false, false))
+    }
+
+    @Test
     fun `fullscreen extract always off`() {
         assertFalse(ImeLayoutPolicy.fullscreenMode())
     }
