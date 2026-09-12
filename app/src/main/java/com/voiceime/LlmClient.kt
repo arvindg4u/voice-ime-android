@@ -235,8 +235,7 @@ class LlmClient {
                         log(
                             "live-wire",
                             "hs headers=" + response.headers.size +
-                                " accept=" + response.header("Sec-WebSocket-Accept", "none")
-                                    .take(8) +
+                                " accept=" + (response.header("Sec-WebSocket-Accept")?.take(8) ?: "none") +
                                 " t=" + System.currentTimeMillis(),
                         )
                         // Deflate forensics: if the server accepted
