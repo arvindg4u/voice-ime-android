@@ -311,7 +311,9 @@ class LlmClientTest {
         val modalities = setup.getJSONObject("generationConfig").getJSONArray("responseModalities")
         assertEquals(1, modalities.length())
         assertEquals("TEXT", modalities.getString(0))
-        assertEquals("VERBATIM", setup.getJSONObject("inputAudioTranscription").getString("mode"))
+        val transcription = setup.getJSONObject("inputAudioTranscription")
+        assertEquals("VERBATIM", transcription.getString("mode"))
+        assertEquals(0, transcription.getJSONArray("languageCodes").length())
     }
 
     @Test
@@ -380,7 +382,7 @@ class LlmClientTest {
     @Test
     fun `parseInteractionsTranscript reads output_text then steps`() {
         assertEquals("hello", parseInteractionsTranscript("""{"output_text":"hello"}"""))
-        val steps = """{"steps":[{"content":[{"type":"text","text":"hi "},{"type":"text","text":"there"}]}]}"""
+        val steps = """{"steps":[{"type":"model_output","content":[{"type":"text","text":"hi "},{"type":"text","text":"there"}]}]}"""
         assertEquals("hi there", parseInteractionsTranscript(steps))
         try {
             parseInteractionsTranscript("""{"output_text":"  "}""")
@@ -388,6 +390,15 @@ class LlmClientTest {
         } catch (e: TranscribeException) {
             assertTrue(e.message!!.isNotEmpty())
         }
+    }
+
+    @Test
+    fun `parseInteractionsTranscript ignores user_input echo steps`() {
+        val mixed = """{"steps":[
+            {"type":"user_input","content":[{"type":"text","text":"Transcribe the speech"}]},
+            {"type":"model_output","content":[{"text":"hello"}]}
+        ]}"""
+        assertEquals("hello", parseInteractionsTranscript(mixed))
     }
 
     @Test

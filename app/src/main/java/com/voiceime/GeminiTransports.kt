@@ -101,7 +101,9 @@ internal fun buildLiveSetupJson(model: String, smartMode: Boolean = false): Stri
                 )
                 .put(
                     "inputAudioTranscription",
-                    JSONObject().put("mode", if (smartMode) "SMART" else "VERBATIM"),
+                    JSONObject()
+                        .put("languageCodes", JSONArray())
+                        .put("mode", if (smartMode) "SMART" else "VERBATIM"),
                 ),
         )
         .toString()
@@ -400,7 +402,10 @@ internal fun parseInteractionsTranscript(payload: String): String {
     val sb = StringBuilder()
     val steps = root.optJSONArray("steps") ?: JSONArray()
     for (s in 0 until steps.length()) {
-        val contents = steps.optJSONObject(s)?.optJSONArray("content") ?: continue
+        val step = steps.optJSONObject(s) ?: continue
+        // Only model output: user_input steps echo our own instruction/audio.
+        if (step.optString("type") != "model_output") continue
+        val contents = step.optJSONArray("content") ?: continue
         for (c in 0 until contents.length()) {
             val content = contents.optJSONObject(c) ?: continue
             // Live shape omits "type" (bare {"text": ...}); accept text parts
