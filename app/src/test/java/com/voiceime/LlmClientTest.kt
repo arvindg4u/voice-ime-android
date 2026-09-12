@@ -4,6 +4,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -13,6 +14,38 @@ class LlmClientTest {
     private val client = LlmClient()
 
     private val geminiBody = """{"candidates":[{"content":{"parts":[{"text":"hi"}]}}]}"""
+
+    /** Minimal 44-byte-header PCM WAV for wavToMono16kPcm tests. */
+    private fun wavBytes(
+        sampleRate: Int = 16000,
+        channels: Int = 1,
+        bits: Int = 16,
+        audioFormat: Int = 1,
+        pcm: ByteArray = byteArrayOf(1, 2, 3, 4),
+    ): ByteArray {
+        val out = ByteArray(44 + pcm.size)
+        fun tag(off: Int, s: String) {
+            s.toByteArray(Charsets.US_ASCII).copyInto(out, off)
+        }
+        fun u16(off: Int, v: Int) {
+            out[off] = (v and 0xFF).toByte()
+            out[off + 1] = ((v ushr 8) and 0xFF).toByte()
+        }
+        fun u32(off: Int, v: Int) {
+            out[off] = (v and 0xFF).toByte()
+            out[off + 1] = ((v ushr 8) and 0xFF).toByte()
+            out[off + 2] = ((v ushr 16) and 0xFF).toByte()
+            out[off + 3] = ((v ushr 24) and 0xFF).toByte()
+        }
+        tag(0, "RIFF"); u32(4, 36 + pcm.size); tag(8, "WAVE")
+        tag(12, "fmt "); u32(16, 16)
+        u16(20, audioFormat); u16(22, channels); u32(24, sampleRate)
+        u32(28, sampleRate * channels * bits / 8)
+        u16(32, channels * bits / 8); u16(34, bits)
+        tag(36, "data"); u32(40, pcm.size)
+        pcm.copyInto(out, 44)
+        return out
+    }
 
     @Test
     fun `mapHttpError includes server detail and keeps bare messages when body empty`() {
@@ -240,6 +273,126 @@ class LlmClientTest {
             assertEquals("key2", req.getHeader("x-goog-api-key"))
         } finally {
             server.shutdown()
+        }
+    }
+
+    @Test
+    fun `requiresLive true for live markers`() {
+        assertTrue(client.requiresLive("gemini-3.5-transcribe-live"))
+        assertTrue(client.requiresLive("gemini-2.5-flash-live-preview"))
+        assertTrue(client.requiresLive("gemini-2.5-flash-preview-native-audio-dialog"))
+        assertTrue(client.requiresLive("  Gemini-2.0-Flash-Live  "))
+    }
+
+    @Test
+    fun `requiresLive false for rest models`() {
+        assertFalse(client.requiresLive("gemini-2.5-flash"))
+        assertFalse(client.requiresLive("gemini-2.0-flash"))
+        assertFalse(client.requiresLive("gemini-2.5-flash-preview-tts"))
+        assertFalse(client.requiresLive(""))
+    }
+
+    @Test
+    fun `isLiveOnlyError true only on 400 with live wording`() {
+        val body = """{"error":{"message":"This model only supports the bidiGenerateContent method. Please use the Live API."}}"""
+        assertTrue(client.isLiveOnlyError(400, body))
+        assertTrue(client.isLiveOnlyError(400, "please use the gemini live api"))
+        assertFalse(client.isLiveOnlyError(400, """{"error":{"message":"bad request"}}"""))
+        assertFalse(client.isLiveOnlyError(401, body))
+        assertFalse(client.isLiveOnlyError(429, body))
+        assertFalse(client.isLiveOnlyError(400, ""))
+    }
+
+    @Test
+    fun `buildLiveSetupJson carries model audio modality and transcription flag`() {
+        val json = JSONObject(client.buildLiveSetupJson("gemini-3.5-transcribe-live"))
+        val setup = json.getJSONObject("setup")
+        assertEquals("models/gemini-3.5-transcribe-live", setup.getString("model"))
+        val modalities = setup.getJSONObject("generationConfig").getJSONArray("responseModalities")
+        assertEquals(1, modalities.length())
+        assertEquals("AUDIO", modalities.getString(0))
+        assertTrue(setup.has("inputAudioTranscription"))
+    }
+
+    @Test
+    fun `buildLiveAudioMessage carries pcm mime and base64 data`() {
+        val chunk = byteArrayOf(1, 2, 3, 4)
+        val json = JSONObject(client.buildLiveAudioMessage(chunk))
+        val audio = json.getJSONObject("realtimeInput").getJSONObject("audio")
+        assertEquals("audio/pcm;rate=16000", audio.getString("mimeType"))
+        val decoded = java.util.Base64.getDecoder().decode(audio.getString("data"))
+        assertTrue(decoded.contentEquals(chunk))
+    }
+
+    @Test
+    fun `parseLiveInputTranscripts joins multi-message fragments`() {
+        val first = """{"serverContent":{"inputTranscription":{"text":"hello "}}}"""
+        val second = """{"serverContent":{"inputTranscription":{"text":"world"}}}"""
+        val joined = (client.parseLiveInputTranscripts(first) +
+            client.parseLiveInputTranscripts(second)).joinToString("")
+        assertEquals("hello world", joined)
+    }
+
+    @Test
+    fun `parseLiveInputTranscripts tolerates snake_case and junk`() {
+        val snake = """{"server_content":{"inputTranscription":{"text":"hi"}}}"""
+        assertEquals(listOf("hi"), client.parseLiveInputTranscripts(snake))
+        assertEquals(emptyList<String>(), client.parseLiveInputTranscripts(""))
+        assertEquals(emptyList<String>(), client.parseLiveInputTranscripts("not json"))
+        assertEquals(emptyList<String>(), client.parseLiveInputTranscripts("""{"serverContent":{}}"""))
+        assertEquals(
+            emptyList<String>(),
+            client.parseLiveInputTranscripts("""{"serverContent":{"inputTranscription":{}}}"""),
+        )
+    }
+
+    @Test
+    fun `isLiveTurnComplete true on turn or generation complete only`() {
+        assertTrue(client.isLiveTurnComplete("""{"serverContent":{"turnComplete":true}}"""))
+        assertTrue(client.isLiveTurnComplete("""{"serverContent":{"generationComplete":true}}"""))
+        assertFalse(client.isLiveTurnComplete("""{"serverContent":{"turnComplete":false}}"""))
+        assertFalse(client.isLiveTurnComplete("""{"serverContent":{}}"""))
+        assertFalse(client.isLiveTurnComplete("not json"))
+        assertFalse(client.isLiveTurnComplete(""))
+    }
+
+    @Test
+    fun `liveUrl defaults for google and wraps custom hosts`() {
+        assertEquals(
+            "wss://generativelanguage.googleapis.com" +
+                "/ws/google.ai.generativelanguage.v1beta/GenerativeService.BidiGenerateContent",
+            client.liveUrl("https://generativelanguage.googleapis.com/v1beta"),
+        )
+        val custom = client.liveUrl("https://proxy.example.com/v1beta")
+        assertTrue(custom.startsWith("wss://proxy.example.com/ws/"))
+        val http = client.liveUrl("http://proxy.example.com/v1beta")
+        assertTrue(http.startsWith("ws://proxy.example.com/ws/"))
+    }
+
+    @Test
+    fun `wavToMono16kPcm strips header and returns pcm`() {
+        val pcm = byteArrayOf(1, 2, 3, 4)
+        assertTrue(client.wavToMono16kPcm(wavBytes(pcm = pcm)).contentEquals(pcm))
+    }
+
+    @Test
+    fun `wavToMono16kPcm rejects wrong rate and non-pcm`() {
+        for (bad in listOf(
+            wavBytes(sampleRate = 8000),
+            wavBytes(sampleRate = 44100),
+            wavBytes(channels = 2),
+            wavBytes(bits = 8),
+            wavBytes(audioFormat = 3),
+            byteArrayOf(1, 2, 3),
+            "NOT-A-WAV-FILE-PADDING-ENOUGH-BYTES!!".toByteArray(Charsets.US_ASCII),
+        )) {
+            try {
+                client.wavToMono16kPcm(bad)
+                fail("expected TranscribeException")
+            } catch (e: TranscribeException) {
+                // Expected; message is user-safe.
+                assertTrue(e.message!!.isNotEmpty())
+            }
         }
     }
 }
