@@ -542,7 +542,7 @@ class LlmClientTest {
     @Test
     fun `liveSession buffers pcm sent before handshake completes`() {
         // Mic starts instantly on tap while TLS+WS handshake is in flight:
-        // early chunks must be flushed after setup, never dropped.
+        // early chunks must be flushed after setupComplete, never dropped.
         val server = MockWebServer()
         val received = CopyOnWriteArrayList<String>()
         val serverWs1 = AtomicReference<WebSocket>()
@@ -553,6 +553,9 @@ class LlmClientTest {
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 received.add(text)
+                if (text.contains("inputAudioTranscription")) {
+                    webSocket.send("{\"setupComplete\":{}}")
+                }
             }
         }))
         server.start()
@@ -567,14 +570,15 @@ class LlmClientTest {
             val deadline = System.currentTimeMillis() + 10_000
             while (System.currentTimeMillis() < deadline) {
                 val audios = received.count { it.contains("\"audio\"") }
-                if (received.any { it.contains("inputAudioTranscription") } && audios >= 2) break
+                if (received.any { it.contains("activityStart") } && audios >= 2) break
                 Thread.sleep(50)
             }
             assertTrue(received.any { it.contains("inputAudioTranscription") })
             assertEquals(2, received.count { it.contains("\"audio\"") })
             val setupIdx = received.indexOfFirst { it.contains("inputAudioTranscription") }
+            val startIdx = received.indexOfFirst { it.contains("activityStart") }
             val firstAudio = received.indexOfFirst { it.contains("\"audio\"") }
-            assertTrue(setupIdx >= 0 && firstAudio > setupIdx)
+            assertTrue(setupIdx >= 0 && startIdx > setupIdx && firstAudio > startIdx)
         } finally {
             try {
                 session.close()
