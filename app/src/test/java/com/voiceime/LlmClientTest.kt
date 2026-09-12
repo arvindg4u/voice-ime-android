@@ -711,7 +711,14 @@ class LlmClientTest {
             }
             assertTrue(serverWs.get() != null)
             // Server stays silent: no transcripts, no turnComplete.
-            session.finish(graceMs = 300)
+            // finish() only sends end markers; awaitFinal times out;
+            // close() delivers the close frame the server observes.
+            session.finish()
+            val signaled = kotlinx.coroutines.runBlocking {
+                session.awaitFinal(300)
+            }
+            assertFalse(signaled)
+            session.close()
             assertTrue(serverClosed.await(10, TimeUnit.SECONDS))
         } finally {
             try {
