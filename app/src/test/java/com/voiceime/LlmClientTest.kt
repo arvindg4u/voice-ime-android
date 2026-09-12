@@ -318,7 +318,7 @@ class LlmClientTest {
         val modalities = setup.getJSONObject("generationConfig").getJSONArray("responseModalities")
         assertEquals(1, modalities.length())
         assertEquals("TEXT", modalities.getString(0))
-        val transcription = setup.getJSONObject("generationConfig").getJSONObject("inputAudioTranscription")
+        val transcription = setup.getJSONObject("inputAudioTranscription")
         assertEquals("VERBATIM", transcription.getString("mode"))
         assertEquals(0, transcription.getJSONArray("languageCodes").length())
     }
@@ -328,8 +328,7 @@ class LlmClientTest {
         val json = JSONObject(buildLiveSetupJson("gemini-3.5-transcribe-live", smartMode = true))
         assertEquals(
             "SMART",
-            json.getJSONObject("setup").getJSONObject("generationConfig")
-                .getJSONObject("inputAudioTranscription").getString("mode"),
+            json.getJSONObject("setup").getJSONObject("inputAudioTranscription").getString("mode"),
         )
     }
 

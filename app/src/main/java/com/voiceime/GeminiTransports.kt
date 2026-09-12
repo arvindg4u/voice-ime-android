@@ -106,18 +106,7 @@ internal fun buildLiveSetupJson(model: String, smartMode: Boolean = false): Stri
                 .put("model", "models/$model")
                 .put(
                     "generationConfig",
-                    JSONObject()
-                        .put("responseModalities", JSONArray().put("TEXT"))
-                        // Docs-exact: inputAudioTranscription lives INSIDE
-                        // generationConfig (live-transcribe guide), not at
-                        // setup top level — the server ignores the latter
-                        // and transcription never enables (zero messages).
-                        .put(
-                            "inputAudioTranscription",
-                            JSONObject()
-                                .put("languageCodes", JSONArray())
-                                .put("mode", if (smartMode) "SMART" else "VERBATIM"),
-                        ),
+                    JSONObject().put("responseModalities", JSONArray().put("TEXT")),
                 )
                 .put(
                     "realtimeInputConfig",
@@ -125,6 +114,16 @@ internal fun buildLiveSetupJson(model: String, smartMode: Boolean = false): Stri
                         "automaticActivityDetection",
                         JSONObject().put("disabled", true),
                     ),
+                )
+                // Raw-socket proven: inputAudioTranscription is a TOP-LEVEL
+                // setup field. Nested inside generationConfig the server
+                // rejects it outright (Unknown name at
+                // setup.generationConfig) and the session stays silent.
+                .put(
+                    "inputAudioTranscription",
+                    JSONObject()
+                        .put("languageCodes", JSONArray())
+                        .put("mode", if (smartMode) "SMART" else "VERBATIM"),
                 ),
         )
         .toString()
