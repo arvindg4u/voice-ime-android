@@ -554,8 +554,8 @@ class LlmClientTest {
     @Test
     fun `liveSocket closePayload carries code and reason`() {
         val payload = LiveSocket.closePayload(1000, "bye")
-        assertEquals(0x03, payload[0])
-        assertEquals(0xE8.toByte(), payload[1])
+        assertEquals(0x03, payload[0].toInt() and 0xFF)
+        assertEquals(0xE8, payload[1].toInt() and 0xFF)
         assertEquals("bye", String(payload, 2, payload.size - 2, Charsets.UTF_8))
     }
 
