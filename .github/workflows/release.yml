@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Restore release keystore
+        env:
+          VOICEIME_KEYSTORE_B64: ${{ secrets.VOICEIME_KEYSTORE_B64 }}
+        run: |
+          echo "$VOICEIME_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/voiceime-release.keystore"
+          echo "VOICEIME_KEYSTORE_FILE=$RUNNER_TEMP/voiceime-release.keystore" >> "$GITHUB_ENV"
+
+      - name: Run unit tests
+        env:
+          VOICEIME_STORE_PASSWORD: ${{ secrets.VOICEIME_STORE_PASSWORD }}
+          VOICEIME_KEY_ALIAS: ${{ secrets.VOICEIME_KEY_ALIAS }}
+          VOICEIME_KEY_PASSWORD: ${{ secrets.VOICEIME_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Build signed release APK
+        env:
+          VOICEIME_STORE_PASSWORD: ${{ secrets.VOICEIME_STORE_PASSWORD }}
+          VOICEIME_KEY_ALIAS: ${{ secrets.VOICEIME_KEY_ALIAS }}
+          VOICEIME_KEY_PASSWORD: ${{ secrets.VOICEIME_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --stacktrace
+
+      - name: Verify APK signature
+        run: |
+          APK=app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$APK" | head -5
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/app-release.apk
+          generate_release_notes: true
+          draft: false
+          prerelease: false

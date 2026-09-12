@@ -11,13 +11,34 @@ android {
         applicationId = "com.voiceime"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.1.0"
+    }
+
+    signingConfigs {
+        create("release") {
+            // CI provides these via VOICEIME_* secrets; local builds without
+            // them fall back to the debug keystore (assembleRelease unsigned
+            // locally is not supported — use CI artifacts).
+            val ksFile = System.getenv("VOICEIME_KEYSTORE_FILE")
+            if (!ksFile.isNullOrEmpty()) {
+                storeFile = file(ksFile)
+                storePassword = System.getenv("VOICEIME_STORE_PASSWORD")
+                keyAlias = System.getenv("VOICEIME_KEY_ALIAS")
+                keyPassword = System.getenv("VOICEIME_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
