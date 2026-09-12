@@ -571,8 +571,17 @@ class LlmClientTest {
             val firstAudio = received.indexOfFirst { it.contains("\"audio\"") }
             assertTrue(setupIdx >= 0 && firstAudio > setupIdx)
         } finally {
-            session.close()
-            server.shutdown()
+            try {
+                session.close()
+            } finally {
+                try {
+                    // Let the close frame flush before killing the socket.
+                    Thread.sleep(100)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                server.shutdown()
+            }
         }
     }
 
@@ -595,8 +604,17 @@ class LlmClientTest {
             assertTrue(latch.await(10, TimeUnit.SECONDS))
             assertTrue(err.contains("boom-detail"))
         } finally {
-            session.close()
-            server.shutdown()
+            try {
+                session.close()
+            } finally {
+                try {
+                    // Let the close frame flush before killing the socket.
+                    Thread.sleep(100)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                server.shutdown()
+            }
         }
     }
 
@@ -633,8 +651,17 @@ class LlmClientTest {
             assertEquals(listOf("hel"), interims.toList())
             assertEquals(listOf("hello"), finals.toList())
         } finally {
-            session.close()
-            server.shutdown()
+            try {
+                session.close()
+            } finally {
+                try {
+                    // Let the close frame flush before killing the socket.
+                    Thread.sleep(100)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                }
+                server.shutdown()
+            }
         }
     }
 }
