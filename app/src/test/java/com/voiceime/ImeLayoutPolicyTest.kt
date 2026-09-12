@@ -83,4 +83,36 @@ class ImeLayoutPolicyTest {
         // Negative elapsed (clock moved): fire now.
         assertEquals(1000L, ImeLayoutPolicy.nextTimerDelayMs(-50L))
     }
+
+    @Test
+    fun `idle ripple stays a subtle hairline pulse`() {
+        // Sweeps a full sine cycle across bars and phase: never negative,
+        // never above the live-bar floor, so idle never mimics activity.
+        for (phaseTenths in 0..62) {
+            val phase = phaseTenths * 0.1f
+            for (bar in 0 until 48) {
+                val ripple = ImeLayoutPolicy.idleRippleFraction(phase, bar)
+                assertTrue("ripple $ripple at phase $phase bar $bar", ripple >= 0f)
+                assertTrue("ripple $ripple at phase $phase bar $bar", ripple <= 0.1f)
+            }
+        }
+        // Phase 0, bar 0 sits exactly on the base (sin(0) = 0).
+        assertEquals(
+            ImeLayoutPolicy.IDLE_RIPPLE_BASE,
+            ImeLayoutPolicy.idleRippleFraction(0f, 0),
+            0.0001f,
+        )
+        // Neighbouring bars differ: the pulse travels across the strip.
+        val travelled = (0 until 48).any { bar ->
+            ImeLayoutPolicy.idleRippleFraction(0f, bar) !=
+                ImeLayoutPolicy.idleRippleFraction(0f, (bar + 1) % 48)
+        }
+        assertTrue(travelled)
+        // Advancing phase moves every bar: the hero never looks dead.
+        val moves = (0 until 48).any { bar ->
+            ImeLayoutPolicy.idleRippleFraction(0f, bar) !=
+                ImeLayoutPolicy.idleRippleFraction(0.1f, bar)
+        }
+        assertTrue(moves)
+    }
 }

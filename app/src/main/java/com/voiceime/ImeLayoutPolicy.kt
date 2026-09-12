@@ -96,4 +96,23 @@ object ImeLayoutPolicy {
         val startX = ((viewWidthPx - slotW * barCount) / 2f).coerceAtLeast(0f)
         return BarGeometry(slotW, barW, startX)
     }
+
+    /**
+     * Idle waveform pulse for bar [barIndex] at sine [phase]: a slow
+     * traveling ripple oscillating around [IDLE_RIPPLE_BASE] with amplitude
+     * [IDLE_RIPPLE_DEPTH], so the idle hero breathes instead of sitting
+     * static. Pure math — the view owns phase/step/cadence, this owns shape.
+     */
+    fun idleRippleFraction(phase: Float, barIndex: Int): Float =
+        IDLE_RIPPLE_BASE + IDLE_RIPPLE_DEPTH *
+            kotlin.math.sin(phase + barIndex * IDLE_RIPPLE_WAVE_STEP).toFloat()
+
+    /** Idle pulse midpoint as a fraction of view height. */
+    const val IDLE_RIPPLE_BASE = 0.06f
+
+    /** Idle pulse swing around the base; base - depth stays a hairline. */
+    const val IDLE_RIPPLE_DEPTH = 0.03f
+
+    /** Per-bar phase offset so the pulse travels across the strip. */
+    const val IDLE_RIPPLE_WAVE_STEP = 0.35f
 }
