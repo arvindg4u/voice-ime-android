@@ -324,9 +324,9 @@ class LlmClient {
                 "fmt " -> {
                     if (size < 16) throw TranscribeException("Invalid audio — try again")
                     audioFormat = u16(wav, pos + 8)
-                    channels = u16(wav, pos + 12)
-                    sampleRate = u32(wav, pos + 16)
-                    bitsPerSample = u16(wav, pos + 24)
+                    channels = u16(wav, pos + 10)
+                    sampleRate = u32(wav, pos + 12)
+                    bitsPerSample = u16(wav, pos + 22)
                 }
                 "data" -> {
                     dataOffset = pos + 8
