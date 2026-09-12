@@ -1,5 +1,8 @@
 package com.voiceime
 
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.json.JSONObject
@@ -8,6 +11,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class LlmClientTest {
 
@@ -529,6 +536,105 @@ class LlmClientTest {
                 // Expected; message is user-safe.
                 assertTrue(e.message!!.isNotEmpty())
             }
+        }
+    }
+
+    @Test
+    fun `liveSession buffers pcm sent before handshake completes`() {
+        // Mic starts instantly on tap while TLS+WS handshake is in flight:
+        // early chunks must be flushed after setup, never dropped.
+        val server = MockWebServer()
+        val received = CopyOnWriteArrayList<String>()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                received.add(text)
+            }
+        }))
+        server.start()
+        val session = client.startLiveSession(
+            "k", server.url("/v1beta").toString(), "gemini-3.5-transcribe-live",
+            onInterim = {}, onFinal = {}, onError = {},
+        )
+        try {
+            val chunk = ByteArray(3200) { 7 }
+            session.sendPcm(chunk)
+            session.sendPcm(chunk)
+            val deadline = System.currentTimeMillis() + 10_000
+            while (System.currentTimeMillis() < deadline) {
+                val audios = received.count { it.contains("\"audio\"") }
+                if (received.any { it.contains("inputAudioTranscription") } && audios >= 2) break
+                Thread.sleep(50)
+            }
+            assertTrue(received.any { it.contains("inputAudioTranscription") })
+            assertEquals(2, received.count { it.contains("\"audio\"") })
+            val setupIdx = received.indexOfFirst { it.contains("inputAudioTranscription") }
+            val firstAudio = received.indexOfFirst { it.contains("\"audio\"") }
+            assertTrue(setupIdx >= 0 && firstAudio > setupIdx)
+        } finally {
+            session.close()
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `liveSession surfaces handshake rejection detail`() {
+        val server = MockWebServer()
+        server.enqueue(
+            MockResponse().setResponseCode(400)
+                .setBody("{\"error\":{\"message\":\"boom-detail\"}}"),
+        )
+        server.start()
+        val latch = CountDownLatch(1)
+        var err = ""
+        val session = client.startLiveSession(
+            "k", server.url("/v1beta").toString(), "m",
+            onInterim = {}, onFinal = {},
+            onError = { err = it; latch.countDown() },
+        )
+        try {
+            assertTrue(latch.await(10, TimeUnit.SECONDS))
+            assertTrue(err.contains("boom-detail"))
+        } finally {
+            session.close()
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `liveSession streams interim then final transcripts`() {
+        val server = MockWebServer()
+        val serverWs = AtomicReference<WebSocket>()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                serverWs.set(webSocket)
+            }
+        }))
+        server.start()
+        val interims = CopyOnWriteArrayList<String>()
+        val finals = CopyOnWriteArrayList<String>()
+        val session = client.startLiveSession(
+            "k", server.url("/v1beta").toString(), "m",
+            onInterim = { interims.add(it) },
+            onFinal = { finals.add(it) },
+            onError = {},
+        )
+        try {
+            val openDeadline = System.currentTimeMillis() + 10_000
+            while (serverWs.get() == null && System.currentTimeMillis() < openDeadline) {
+                Thread.sleep(20)
+            }
+            val ws = serverWs.get() ?: fail("no server socket")
+            ws.send("{\"serverContent\":{\"interimInputTranscription\":{\"text\":\"hel\"}}}}")
+            ws.send("{\"serverContent\":{\"inputTranscription\":{\"text\":\"hello\"}}}}")
+            val msgDeadline = System.currentTimeMillis() + 10_000
+            while ((interims.isEmpty() || finals.isEmpty()) && System.currentTimeMillis() < msgDeadline) {
+                Thread.sleep(20)
+            }
+            assertEquals(listOf("hel"), interims.toList())
+            assertEquals(listOf("hello"), finals.toList())
+        } finally {
+            session.close()
+            server.shutdown()
         }
     }
 }

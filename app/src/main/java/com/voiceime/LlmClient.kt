@@ -195,6 +195,8 @@ class LlmClient {
     ) {
         private val wsUrl = liveUrl(baseUrl)
         @Volatile private var ws: WebSocket? = null
+        @Volatile private var open = false
+        private val pending = ArrayDeque<ByteArray>()
         @Volatile private var finished = false
         @Volatile private var failed = false
         private val finalParts = StringBuilder()
@@ -203,8 +205,25 @@ class LlmClient {
             val listener = object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     try {
+                        if (finished || failed) return
                         webSocket.send(buildLiveSetupJson(model, smartMode))
                         webSocket.send(buildLiveActivityStartJson())
+                        // The mic starts instantly on tap while the TLS+WS
+                        // handshake is still in flight: flush chunks that
+                        // arrived early instead of dropping them.
+                        val drain: List<ByteArray>
+                        synchronized(pending) {
+                            open = true
+                            drain = pending.toList()
+                            pending.clear()
+                        }
+                        for (chunk in drain) {
+                            if (finished || failed) return
+                            if (!webSocket.send(buildLiveAudioMessage(chunk))) {
+                                failOnce("Network error — check connection")
+                                return
+                            }
+                        }
                     } catch (e: Exception) {
                         failOnce("Network error — check connection")
                     }
@@ -247,7 +266,7 @@ class LlmClient {
                     val code = response?.code ?: -1
                     when {
                         code == 429 -> failOnce("Rate limited — retry")
-                        code == 401 || code == 403 -> {
+                        code in 400..499 -> {
                             val body = try {
                                 response?.body?.string().orEmpty()
                             } catch (e: Exception) {
@@ -255,7 +274,15 @@ class LlmClient {
                             }
                             failOnce(mapHttpError(code, body))
                         }
-                        else -> failOnce("Network error — check connection")
+                        else -> {
+                            // No HTTP response (DNS/TLS/timeout): show the
+                            // transport cause, never the URL (holds the key).
+                            val detail = t.message.orEmpty().substringBefore("?").take(120)
+                            failOnce(
+                                if (detail.isBlank()) "Network error — check connection"
+                                else "Network error — $detail",
+                            )
+                        }
                     }
                 }
             }
@@ -266,6 +293,14 @@ class LlmClient {
         /** Streams one raw PCM chunk (any length; 3200B ≈ 100 ms nominal). */
         fun sendPcm(pcmChunk: ByteArray) {
             if (finished || failed) return
+            synchronized(pending) {
+                if (!open) {
+                    // Handshake still in flight: buffer (cap ~30 s) for the
+                    // onOpen flush. Never fail the session for early audio.
+                    if (pending.size < 300) pending.addLast(pcmChunk)
+                    return
+                }
+            }
             try {
                 val ok = ws?.send(buildLiveAudioMessage(pcmChunk)) ?: false
                 if (!ok) failOnce("Network error — check connection")
@@ -294,6 +329,7 @@ class LlmClient {
         fun close() {
             if (finished || failed) return
             finished = true
+            synchronized(pending) { pending.clear() }
             try {
                 ws?.close(1001, "cancel")
             } catch (e: Exception) {
@@ -305,6 +341,7 @@ class LlmClient {
         private fun finishOk() {
             if (finished || failed) return
             finished = true
+            synchronized(pending) { pending.clear() }
             try {
                 ws?.close(1000, null)
             } catch (e: Exception) {
@@ -316,6 +353,7 @@ class LlmClient {
         private fun failOnce(message: String) {
             if (finished || failed) return
             failed = true
+            synchronized(pending) { pending.clear() }
             try {
                 ws?.close(1001, "error")
             } catch (e: Exception) {

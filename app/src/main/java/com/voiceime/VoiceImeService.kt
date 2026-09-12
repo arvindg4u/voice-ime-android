@@ -434,6 +434,7 @@ class VoiceImeService : InputMethodService() {
      */
     private var liveStreamingSession: LlmClient.LiveSession? = null
     private val liveFinalParts = StringBuilder()
+    private var liveLastInterim = 
 
     private fun startLiveStreaming() {
         cancelWork()
@@ -450,7 +451,10 @@ class VoiceImeService : InputMethodService() {
             smartMode = settings.smartMode,
             onInterim = { preview ->
                 mainHandler.post {
-                    if (state == State.RECORDING) statusText?.text = preview
+                    if (state == State.RECORDING) {
+                        liveLastInterim = preview
+                        statusText?.text = preview
+                    }
                 }
             },
             onFinal = { text ->
@@ -486,6 +490,7 @@ class VoiceImeService : InputMethodService() {
             return
         }
         liveFinalParts.setLength(0)
+        liveLastInterim = ""
         state = State.RECORDING
         recordStartMs = System.currentTimeMillis()
         lastTimerSecond = -1
@@ -549,8 +554,17 @@ class VoiceImeService : InputMethodService() {
             // Give the server a short window to flush the final turn; the
             // interim preview already on screen is the fallback text.
             kotlinx.coroutines.delay(4000)
+            val interim = liveLastInterim.trim()
             val text = liveFinalParts.toString().trim()
-                .ifEmpty { statusText?.text?.toString().orEmpty().trim() }
+                .ifEmpty { interim }
+                .ifEmpty {
+                    val shown = statusText?.text?.toString().orEmpty().trim()
+                    // The status view otherwise still holds "Transcribing…" —
+                    // never commit a status string as a transcript.
+                    if (shown == getString(R.string.ime_status_uploading) ||
+                        shown == getString(R.string.ime_status_recording)
+                    ) "" else shown
+                }
             if (text.isEmpty()) {
                 showError(getString(R.string.ime_error_empty))
             } else {
@@ -748,6 +762,7 @@ class VoiceImeService : InputMethodService() {
         }
         liveStreamingSession = null
         liveFinalParts.setLength(0)
+        liveLastInterim = ""
         recorder?.discard()
         recorder = null
         lastWav = null
