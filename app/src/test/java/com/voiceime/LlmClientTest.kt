@@ -618,19 +618,11 @@ class LlmClientTest {
             try {
                 session.close()
             } finally {
-                // Close the server end first so MockWebServer.shutdown()
-                // never trips over a live connection.
                 try {
-                    serverWs1.get()?.close(1000, null)
-                } catch (e: Exception) {
-                    // Already gone.
+                    server.shutdown()
+                } catch (e: java.io.IOException) {
+                    // Handshake rejected; socket never established.
                 }
-                try {
-                    Thread.sleep(100)
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                }
-                server.shutdown()
             }
         }
     }
