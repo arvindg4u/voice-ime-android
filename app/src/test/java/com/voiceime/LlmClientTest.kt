@@ -50,22 +50,22 @@ class LlmClientTest {
     @Test
     fun `mapHttpError includes server detail and keeps bare messages when body empty`() {
         val body = """{"error":{"message":"Incorrect API key provided"}}"""
-        val withDetail = client.mapHttpError(401, body)
+        val withDetail = mapHttpError(401, body)
         assertTrue(withDetail.contains("Check API key in settings"))
         assertTrue(withDetail.contains("Incorrect API key provided"))
 
-        assertEquals("Rate limited — retry", client.mapHttpError(429, ""))
+        assertEquals("Rate limited — retry", mapHttpError(429, ""))
     }
 
     @Test
     fun `mapHttpError 404 points at model`() {
-        val msg = client.mapHttpError(404, "")
+        val msg = mapHttpError(404, "")
         assertTrue(msg.contains("Model not found or no access"))
     }
 
     @Test
     fun `buildGeminiRequestJson carries wav inlineData and instruction text`() {
-        val body = client.buildGeminiRequestJson("QUJDRA==")
+        val body = buildGeminiRequestJson("QUJDRA==")
         val json = JSONObject(body)
         val parts = json.getJSONArray("contents").getJSONObject(0).getJSONArray("parts")
         val inline = parts.getJSONObject(0).getJSONObject("inlineData")
@@ -77,7 +77,7 @@ class LlmClientTest {
 
     @Test
     fun `buildGeminiRequestJson always carries systemInstruction with base role text`() {
-        val json = JSONObject(client.buildGeminiRequestJson("QUJDRA=="))
+        val json = JSONObject(buildGeminiRequestJson("QUJDRA=="))
         val systemText = json.getJSONObject("systemInstruction")
             .getJSONArray("parts").getJSONObject(0).getString("text")
         assertTrue(systemText.contains("You are a speech transcription assistant"))
@@ -86,7 +86,7 @@ class LlmClientTest {
 
     @Test
     fun `buildGeminiRequestJson appends custom prompt under User preferences`() {
-        val json = JSONObject(client.buildGeminiRequestJson("QUJDRA==", "Keep Hinglish as-is"))
+        val json = JSONObject(buildGeminiRequestJson("QUJDRA==", "Keep Hinglish as-is"))
         val systemText = json.getJSONObject("systemInstruction")
             .getJSONArray("parts").getJSONObject(0).getString("text")
         assertTrue(systemText.startsWith(BASE_SYSTEM))
@@ -96,7 +96,7 @@ class LlmClientTest {
     @Test
     fun `buildGeminiRequestJson blank custom omits User preferences marker`() {
         for (blank in listOf("", "   ")) {
-            val json = JSONObject(client.buildGeminiRequestJson("QUJDRA==", blank))
+            val json = JSONObject(buildGeminiRequestJson("QUJDRA==", blank))
             val systemText = json.getJSONObject("systemInstruction")
                 .getJSONArray("parts").getJSONObject(0).getString("text")
             assertEquals(BASE_SYSTEM, systemText)
@@ -109,7 +109,7 @@ class LlmClientTest {
         val expected = "Transcribe the speech exactly. " +
             "Output only the transcript, no commentary."
         for (custom in listOf("", "Add punctuation")) {
-            val json = JSONObject(client.buildGeminiRequestJson("QUJDRA==", custom))
+            val json = JSONObject(buildGeminiRequestJson("QUJDRA==", custom))
             val parts = json.getJSONArray("contents").getJSONObject(0).getJSONArray("parts")
             assertEquals(expected, parts.getJSONObject(1).getString("text"))
         }
@@ -119,7 +119,7 @@ class LlmClientTest {
     fun `geminiUrl appends model generateContent path`() {
         assertEquals(
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
-            client.geminiUrl("https://generativelanguage.googleapis.com/v1beta/", "gemini-2.5-flash"),
+            geminiUrl("https://generativelanguage.googleapis.com/v1beta/", "gemini-2.5-flash"),
         )
     }
 
@@ -128,25 +128,25 @@ class LlmClientTest {
         val payload = """{"candidates":[
             |{"content":{"parts":[{"text":"hello "},{"text":"world"}]}},
             |{"content":{"parts":[{"text":"!"}]}}]}""".trimMargin()
-        assertEquals("hello world!", client.parseGeminiTranscript(payload))
+        assertEquals("hello world!", parseGeminiTranscript(payload))
     }
 
     @Test(expected = TranscribeException::class)
     fun `parseGeminiTranscript throws on empty or missing candidates`() {
-        client.parseGeminiTranscript("""{"candidates":[]}""")
+        parseGeminiTranscript("""{"candidates":[]}""")
     }
 
     @Test
     fun `normalizeKeys trims drops blanks and dedupes keeping order`() {
         assertEquals(
             listOf("a", "b", "c"),
-            client.normalizeKeys(listOf("  a ", "", "b", "a", "  ", "c", "b")),
+            normalizeKeys(listOf("  a ", "", "b", "a", "  ", "c", "b")),
         )
     }
 
     @Test
     fun `normalizeKeys empty input stays empty`() {
-        assertEquals(emptyList<String>(), client.normalizeKeys(listOf("", "   ")))
+        assertEquals(emptyList<String>(), normalizeKeys(listOf("", "   ")))
     }
 
     @Test
@@ -278,34 +278,34 @@ class LlmClientTest {
 
     @Test
     fun `requiresLive true for live markers`() {
-        assertTrue(client.requiresLive("gemini-3.5-transcribe-live"))
-        assertTrue(client.requiresLive("gemini-2.5-flash-live-preview"))
-        assertTrue(client.requiresLive("gemini-2.5-flash-preview-native-audio-dialog"))
-        assertTrue(client.requiresLive("  Gemini-2.0-Flash-Live  "))
+        assertTrue(requiresLive("gemini-3.5-transcribe-live"))
+        assertTrue(requiresLive("gemini-2.5-flash-live-preview"))
+        assertTrue(requiresLive("gemini-2.5-flash-preview-native-audio-dialog"))
+        assertTrue(requiresLive("  Gemini-2.0-Flash-Live  "))
     }
 
     @Test
     fun `requiresLive false for rest models`() {
-        assertFalse(client.requiresLive("gemini-2.5-flash"))
-        assertFalse(client.requiresLive("gemini-2.0-flash"))
-        assertFalse(client.requiresLive("gemini-2.5-flash-preview-tts"))
-        assertFalse(client.requiresLive(""))
+        assertFalse(requiresLive("gemini-2.5-flash"))
+        assertFalse(requiresLive("gemini-2.0-flash"))
+        assertFalse(requiresLive("gemini-2.5-flash-preview-tts"))
+        assertFalse(requiresLive(""))
     }
 
     @Test
     fun `isLiveOnlyError true only on 400 with live wording`() {
         val body = """{"error":{"message":"This model only supports the bidiGenerateContent method. Please use the Live API."}}"""
-        assertTrue(client.isLiveOnlyError(400, body))
-        assertTrue(client.isLiveOnlyError(400, "please use the gemini live api"))
-        assertFalse(client.isLiveOnlyError(400, """{"error":{"message":"bad request"}}"""))
-        assertFalse(client.isLiveOnlyError(401, body))
-        assertFalse(client.isLiveOnlyError(429, body))
-        assertFalse(client.isLiveOnlyError(400, ""))
+        assertTrue(isLiveOnlyError(400, body))
+        assertTrue(isLiveOnlyError(400, "please use the gemini live api"))
+        assertFalse(isLiveOnlyError(400, """{"error":{"message":"bad request"}}"""))
+        assertFalse(isLiveOnlyError(401, body))
+        assertFalse(isLiveOnlyError(429, body))
+        assertFalse(isLiveOnlyError(400, ""))
     }
 
     @Test
     fun `buildLiveSetupJson carries model text modality and transcription mode`() {
-        val json = JSONObject(client.buildLiveSetupJson("gemini-3.5-transcribe-live"))
+        val json = JSONObject(buildLiveSetupJson("gemini-3.5-transcribe-live"))
         val setup = json.getJSONObject("setup")
         assertEquals("models/gemini-3.5-transcribe-live", setup.getString("model"))
         val modalities = setup.getJSONObject("generationConfig").getJSONArray("responseModalities")
@@ -316,7 +316,7 @@ class LlmClientTest {
 
     @Test
     fun `buildLiveSetupJson smart flag selects SMART mode`() {
-        val json = JSONObject(client.buildLiveSetupJson("gemini-3.5-transcribe-live", smartMode = true))
+        val json = JSONObject(buildLiveSetupJson("gemini-3.5-transcribe-live", smartMode = true))
         assertEquals(
             "SMART",
             json.getJSONObject("setup").getJSONObject("inputAudioTranscription").getString("mode"),
@@ -325,30 +325,30 @@ class LlmClientTest {
 
     @Test
     fun `isInteractionsModel matches only the dedicated model`() {
-        assertTrue(client.isInteractionsModel("gemini-3.5-transcribe"))
-        assertTrue(client.isInteractionsModel("  GEMINI-3.5-TRANSCRIBE  "))
-        assertFalse(client.isInteractionsModel("gemini-3.5-transcribe-live"))
-        assertFalse(client.isInteractionsModel("gemini-2.5-flash"))
-        assertFalse(client.isInteractionsModel(""))
+        assertTrue(isInteractionsModel("gemini-3.5-transcribe"))
+        assertTrue(isInteractionsModel("  GEMINI-3.5-TRANSCRIBE  "))
+        assertFalse(isInteractionsModel("gemini-3.5-transcribe-live"))
+        assertFalse(isInteractionsModel("gemini-2.5-flash"))
+        assertFalse(isInteractionsModel(""))
     }
 
     @Test
     fun `isDevInstructionError matches only the 400 developer-instruction body`() {
         assertTrue(
-            client.isDevInstructionError(
+            isDevInstructionError(
                 400,
                 """{"error":{"message":"Developer instruction is not enabled for this model"}}""",
             ),
         )
-        assertFalse(client.isDevInstructionError(400, """{"error":{"message":"bad request"}}"""))
-        assertFalse(client.isDevInstructionError(401, "Developer instruction is not enabled"))
-        assertFalse(client.isDevInstructionError(400, ""))
+        assertFalse(isDevInstructionError(400, """{"error":{"message":"bad request"}}"""))
+        assertFalse(isDevInstructionError(401, "Developer instruction is not enabled"))
+        assertFalse(isDevInstructionError(400, ""))
     }
 
     @Test
     fun `buildInteractionsRequestJson carries model input and verbatim default`() {
         val json = JSONObject(
-            client.buildInteractionsRequestJson("QUJD", "gemini-3.5-transcribe"),
+            buildInteractionsRequestJson("QUJD", "gemini-3.5-transcribe"),
         )
         assertEquals("gemini-3.5-transcribe", json.getString("model"))
         val input = json.getJSONArray("input")
@@ -367,7 +367,7 @@ class LlmClientTest {
     @Test
     fun `buildInteractionsRequestJson smart flag and custom prompt`() {
         val json = JSONObject(
-            client.buildInteractionsRequestJson("QUJD", "gemini-3.5-transcribe", "Keep Hinglish", smartMode = true),
+            buildInteractionsRequestJson("QUJD", "gemini-3.5-transcribe", "Keep Hinglish", smartMode = true),
         )
         assertEquals(
             "smart",
@@ -379,11 +379,11 @@ class LlmClientTest {
 
     @Test
     fun `parseInteractionsTranscript reads output_text then steps`() {
-        assertEquals("hello", client.parseInteractionsTranscript("""{"output_text":"hello"}"""))
+        assertEquals("hello", parseInteractionsTranscript("""{"output_text":"hello"}"""))
         val steps = """{"steps":[{"content":[{"type":"text","text":"hi "},{"type":"text","text":"there"}]}]}"""
-        assertEquals("hi there", client.parseInteractionsTranscript(steps))
+        assertEquals("hi there", parseInteractionsTranscript(steps))
         try {
-            client.parseInteractionsTranscript("""{"output_text":"  "}""")
+            parseInteractionsTranscript("""{"output_text":"  "}""")
             fail("expected TranscribeException")
         } catch (e: TranscribeException) {
             assertTrue(e.message!!.isNotEmpty())
@@ -394,14 +394,14 @@ class LlmClientTest {
     fun `interactionsUrl appends interactions path`() {
         assertEquals(
             "https://example.com/v1/interactions",
-            client.interactionsUrl("https://example.com/v1/"),
+            interactionsUrl("https://example.com/v1/"),
         )
     }
 
     @Test
     fun `buildLiveAudioMessage carries pcm mime and base64 data`() {
         val chunk = byteArrayOf(1, 2, 3, 4)
-        val json = JSONObject(client.buildLiveAudioMessage(chunk))
+        val json = JSONObject(buildLiveAudioMessage(chunk))
         val audio = json.getJSONObject("realtimeInput").getJSONObject("audio")
         assertEquals("audio/pcm;rate=16000", audio.getString("mimeType"))
         val decoded = java.util.Base64.getDecoder().decode(audio.getString("data"))
@@ -412,32 +412,32 @@ class LlmClientTest {
     fun `parseLiveInputTranscripts joins multi-message fragments`() {
         val first = """{"serverContent":{"inputTranscription":{"text":"hello "}}}"""
         val second = """{"serverContent":{"inputTranscription":{"text":"world"}}}"""
-        val joined = (client.parseLiveInputTranscripts(first) +
-            client.parseLiveInputTranscripts(second)).joinToString("")
+        val joined = (parseLiveInputTranscripts(first) +
+            parseLiveInputTranscripts(second)).joinToString("")
         assertEquals("hello world", joined)
     }
 
     @Test
     fun `parseLiveInputTranscripts tolerates snake_case and junk`() {
         val snake = """{"server_content":{"inputTranscription":{"text":"hi"}}}"""
-        assertEquals(listOf("hi"), client.parseLiveInputTranscripts(snake))
-        assertEquals(emptyList<String>(), client.parseLiveInputTranscripts(""))
-        assertEquals(emptyList<String>(), client.parseLiveInputTranscripts("not json"))
-        assertEquals(emptyList<String>(), client.parseLiveInputTranscripts("""{"serverContent":{}}"""))
+        assertEquals(listOf("hi"), parseLiveInputTranscripts(snake))
+        assertEquals(emptyList<String>(), parseLiveInputTranscripts(""))
+        assertEquals(emptyList<String>(), parseLiveInputTranscripts("not json"))
+        assertEquals(emptyList<String>(), parseLiveInputTranscripts("""{"serverContent":{}}"""))
         assertEquals(
             emptyList<String>(),
-            client.parseLiveInputTranscripts("""{"serverContent":{"inputTranscription":{}}}"""),
+            parseLiveInputTranscripts("""{"serverContent":{"inputTranscription":{}}}"""),
         )
     }
 
     @Test
     fun `isLiveTurnComplete true on turn or generation complete only`() {
-        assertTrue(client.isLiveTurnComplete("""{"serverContent":{"turnComplete":true}}"""))
-        assertTrue(client.isLiveTurnComplete("""{"serverContent":{"generationComplete":true}}"""))
-        assertFalse(client.isLiveTurnComplete("""{"serverContent":{"turnComplete":false}}"""))
-        assertFalse(client.isLiveTurnComplete("""{"serverContent":{}}"""))
-        assertFalse(client.isLiveTurnComplete("not json"))
-        assertFalse(client.isLiveTurnComplete(""))
+        assertTrue(isLiveTurnComplete("""{"serverContent":{"turnComplete":true}}"""))
+        assertTrue(isLiveTurnComplete("""{"serverContent":{"generationComplete":true}}"""))
+        assertFalse(isLiveTurnComplete("""{"serverContent":{"turnComplete":false}}"""))
+        assertFalse(isLiveTurnComplete("""{"serverContent":{}}"""))
+        assertFalse(isLiveTurnComplete("not json"))
+        assertFalse(isLiveTurnComplete(""))
     }
 
     @Test
@@ -445,18 +445,18 @@ class LlmClientTest {
         assertEquals(
             "wss://generativelanguage.googleapis.com" +
                 "/ws/google.ai.generativelanguage.v1beta/GenerativeService.BidiGenerateContent",
-            client.liveUrl("https://generativelanguage.googleapis.com/v1beta"),
+            liveUrl("https://generativelanguage.googleapis.com/v1beta"),
         )
-        val custom = client.liveUrl("https://proxy.example.com/v1beta")
+        val custom = liveUrl("https://proxy.example.com/v1beta")
         assertTrue(custom.startsWith("wss://proxy.example.com/ws/"))
-        val http = client.liveUrl("http://proxy.example.com/v1beta")
+        val http = liveUrl("http://proxy.example.com/v1beta")
         assertTrue(http.startsWith("ws://proxy.example.com/ws/"))
     }
 
     @Test
     fun `wavToMono16kPcm strips header and returns pcm`() {
         val pcm = byteArrayOf(1, 2, 3, 4)
-        assertTrue(client.wavToMono16kPcm(wavBytes(pcm = pcm)).contentEquals(pcm))
+        assertTrue(wavToMono16kPcm(wavBytes(pcm = pcm)).contentEquals(pcm))
     }
 
     @Test
@@ -471,7 +471,7 @@ class LlmClientTest {
             "NOT-A-WAV-FILE-PADDING-ENOUGH-BYTES!!".toByteArray(Charsets.US_ASCII),
         )) {
             try {
-                client.wavToMono16kPcm(bad)
+                wavToMono16kPcm(bad)
                 fail("expected TranscribeException")
             } catch (e: TranscribeException) {
                 // Expected; message is user-safe.
