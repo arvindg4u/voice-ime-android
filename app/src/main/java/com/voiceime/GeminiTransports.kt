@@ -403,7 +403,10 @@ internal fun parseInteractionsTranscript(payload: String): String {
         val contents = steps.optJSONObject(s)?.optJSONArray("content") ?: continue
         for (c in 0 until contents.length()) {
             val content = contents.optJSONObject(c) ?: continue
-            if (content.optString("type") == "text") {
+            // Live shape omits "type" (bare {"text": ...}); accept text parts
+            // unless explicitly typed otherwise.
+            val type = content.optString("type", "text")
+            if (type == "text" || type.isEmpty()) {
                 sb.append(content.optString("text").orEmpty())
             }
         }

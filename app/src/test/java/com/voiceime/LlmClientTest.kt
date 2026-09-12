@@ -391,6 +391,13 @@ class LlmClientTest {
     }
 
     @Test
+    fun `parseInteractionsTranscript accepts bare text parts without type`() {
+        // Live shape: steps[0].content[0] = {"text": "..."} with no "type".
+        val live = """{"steps":[{"content":[{"text":"मेरा नाम"}],"type":"model_output"}]}"""
+        assertEquals("मेरा नाम", parseInteractionsTranscript(live))
+    }
+
+    @Test
     fun `interactionsUrl appends interactions path`() {
         assertEquals(
             "https://example.com/v1/interactions",
