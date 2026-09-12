@@ -724,7 +724,8 @@ class VoiceImeService : InputMethodService() {
             return
         }
         strip.removeAllViews()
-        var visible = entries.take(CLIP_STRIP_LIMIT)
+        val limit = clipStripLimit()
+        var visible = entries.take(limit)
         if (visible.isEmpty()) {
             clipMoreButton?.let { strip.addView(it) }
             scroll.visibility = View.GONE
@@ -733,9 +734,10 @@ class VoiceImeService : InputMethodService() {
         for (entry in visible) {
             val button = Button(this).apply {
                 text = ClipboardPolicy.sanitizePreview(entry)
-                textSize = 12f
+                textSize = resources.getDimension(R.dimen.clip_strip_text_size) /
+                    resources.displayMetrics.scaledDensity
                 minHeight = 0
-                minimumHeight = 40 * resources.displayMetrics.density.toInt().coerceAtLeast(1)
+                minimumHeight = resources.getDimensionPixelSize(R.dimen.voice_strip_min_height)
                 setOnClickListener { commitClipEntry(entry) }
                 setOnLongClickListener {
                     serviceScope.launch {
@@ -757,11 +759,44 @@ class VoiceImeService : InputMethodService() {
         val more = clipMoreButton
         if (more != null) {
             (more.parent as? ViewGroup)?.removeView(more)
-            more.visibility = if (entries.size > CLIP_STRIP_LIMIT) View.VISIBLE else View.GONE
+            more.visibility = if (entries.size > limit) View.VISIBLE else View.GONE
             strip.addView(more)
         }
         scroll.visibility = View.VISIBLE
     }
+
+    /**
+     * Inline history count: resource base, capped low when the IME window is
+     * narrow (split-screen / divider-drag / small DeX window).
+     */
+    internal fun clipStripLimit(): Int {
+        val compact = ImeLayoutPolicy.isCompactMode(
+            inMultiWindow = false,
+            windowWidthDp = currentWindowWidthDp(),
+        )
+        return ImeLayoutPolicy.clipLimit(CLIP_STRIP_LIMIT, compact)
+    }
+
+    /** Current IME window width in dp; 0 when the view isn't attached yet. */
+    internal fun currentWindowWidthDp(): Float {
+        val view = rootView ?: return 0f
+        val widthPx = view.width
+        if (widthPx <= 0) return 0f
+        val density = resources.displayMetrics.density
+        if (density <= 0f) return 0f
+        return widthPx / density
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Rotation / divider-drag / fold: re-render against the new window
+        // size (compact caps, clipped popup) and drop a stale popup.
+        dismissClipPopup()
+        renderClipStrip(clipEntries)
+        renderState()
+    }
+
+    override fun onEvaluateFullscreenMode(): Boolean = ImeLayoutPolicy.fullscreenMode()
 
     private fun commitClipEntry(entry: ClipboardEntry) {
         if (entry.text.isBlank()) return
@@ -927,8 +962,9 @@ class VoiceImeService : InputMethodService() {
                 override fun getItemId(position: Int): Long = position.toLong()
                 override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                     val row = convertView as? TextView ?: TextView(this@VoiceImeService).apply {
-                        minHeight = 48 * resources.displayMetrics.density.toInt().coerceAtLeast(1)
-                        textSize = 14f
+                        minimumHeight = resources.getDimensionPixelSize(R.dimen.clip_popup_row_min_height)
+                        textSize = resources.getDimension(R.dimen.clip_popup_text_size) /
+                            resources.displayMetrics.scaledDensity
                     }
                     row.text = ClipboardPolicy.sanitizePreview(getItem(position))
                     return row
@@ -958,10 +994,12 @@ class VoiceImeService : InputMethodService() {
                 true
             }
         }
+        val baseHeightPx = resources.getDimensionPixelSize(R.dimen.clip_popup_height)
+        val viewHeightPx = rootView?.height ?: 0
         val popup = PopupWindow(
             list,
             ViewGroup.LayoutParams.MATCH_PARENT,
-            (320 * resources.displayMetrics.density).toInt(),
+            ImeLayoutPolicy.popupHeightPx(baseHeightPx, viewHeightPx),
             true,
         )
         clipPopup = popup

@@ -1,0 +1,82 @@
+package com.voiceime
+
+/**
+ * Pure, framework-free layout policy for large-screen / multi-window IME.
+ *
+ * Everything here is JVM-testable: window-size inputs in, layout decisions
+ * out. The service feeds it the current window width (from the attached input
+ * view or WindowManager metrics — never Display.getSize()) and applies the
+ * results to views. Audio and key material never flow through this object.
+ */
+object ImeLayoutPolicy {
+
+    /** Smallest-width breakpoint Matches values-sw600dp/. */
+    const val TABLET_SMALLEST_WIDTH_DP = 600
+
+    /** Default inline history previews when resources are unavailable. */
+    const val DEFAULT_CLIP_LIMIT = 8
+
+    /** Inline history previews in compact (narrow / multi-window) mode. */
+    const val COMPACT_CLIP_LIMIT = 4
+
+    /** Popup height cap as a fraction of the current input-view height. */
+    const val POPUP_HEIGHT_FRACTION = 0.6f
+
+    /**
+     * Compact when the IME window is narrow. Services cannot call
+     * Activity.isInMultiWindowMode, so a narrow window (< 600dp) is the
+     * trigger — it covers split-screen, divider-drag shrinks, and small
+     * DeX windows. The explicit [inMultiWindow] flag exists for callers
+     * (and tests) that do know the windowing state.
+     */
+    fun isCompactMode(inMultiWindow: Boolean, windowWidthDp: Float): Boolean =
+        inMultiWindow || windowWidthDp < TABLET_SMALLEST_WIDTH_DP
+
+    /** Inline clip limit: resource base normally, capped low in compact mode. */
+    fun clipLimit(baseLimit: Int, compact: Boolean, compactCap: Int = COMPACT_CLIP_LIMIT): Int {
+        val base = baseLimit.coerceAtLeast(1)
+        return if (compact) base.coerceAtMost(compactCap.coerceAtLeast(1)) else base
+    }
+
+    /**
+     * Popup height: resource base, capped at [POPUP_HEIGHT_FRACTION] of the
+     * current input-view height so the dialog never covers the whole IME.
+     * Non-positive view height (not measured yet) falls back to the base.
+     */
+    fun popupHeightPx(
+        baseHeightPx: Int,
+        inputViewHeightPx: Int,
+        fraction: Float = POPUP_HEIGHT_FRACTION,
+    ): Int {
+        val base = baseHeightPx.coerceAtLeast(1)
+        if (inputViewHeightPx <= 0) return base
+        return minOf(base, (inputViewHeightPx * fraction).toInt().coerceAtLeast(1))
+    }
+
+    /** Content-strip width: fill what is available, capped at the max width. */
+    fun contentWidthPx(availablePx: Int, maxWidthPx: Int): Int {
+        if (maxWidthPx <= 0) return availablePx.coerceAtLeast(0)
+        if (availablePx <= 0) return maxWidthPx
+        return minOf(availablePx, maxWidthPx)
+    }
+
+    /** Fullscreen extract UI: always off so large-screen landscape keeps app context. */
+    fun fullscreenMode(): Boolean = false
+
+    /** Waveform bar geometry: bars capped at [maxBarPx] and centered. */
+    data class BarGeometry(val slotW: Float, val barW: Float, val startX: Float)
+
+    fun barGeometry(
+        viewWidthPx: Float,
+        barCount: Int,
+        maxBarPx: Float,
+        widthFraction: Float,
+    ): BarGeometry {
+        if (viewWidthPx <= 0f || barCount <= 0) return BarGeometry(0f, 0f, 0f)
+        val naturalSlot = viewWidthPx / barCount
+        val slotW = minOf(naturalSlot, maxBarPx.coerceAtLeast(1f))
+        val barW = (slotW * widthFraction).coerceAtLeast(1f)
+        val startX = ((viewWidthPx - slotW * barCount) / 2f).coerceAtLeast(0f)
+        return BarGeometry(slotW, barW, startX)
+    }
+}

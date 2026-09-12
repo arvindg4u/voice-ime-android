@@ -19,9 +19,9 @@
             android:id="@+id/imeClipMore"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minHeight="40dp"
+            android:minHeight="@dimen/voice_strip_min_height"
             android:text="@string/clipboard_more"
-            android:textSize="12sp"
+            android:textSize="@dimen/clip_strip_text_size"
             android:visibility="gone" />
     </LinearLayout>
 </HorizontalScrollView>

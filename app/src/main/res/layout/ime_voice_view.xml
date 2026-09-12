@@ -9,8 +9,16 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
+    android:gravity="center_horizontal"
     android:background="@android:color/system_neutral1_900"
-    android:padding="8dp">
+    android:padding="@dimen/voice_horizontal_padding">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:maxWidth="@dimen/voice_content_max_width"
+        android:orientation="vertical">
 
     <!-- Top status row: state dot + status + timer right -->
     <LinearLayout
@@ -33,7 +41,7 @@
             android:layout_marginStart="6dp"
             android:text="@string/ime_status_idle"
             android:textColor="@android:color/system_neutral1_50"
-            android:textSize="14sp" />
+            android:textSize="@dimen/voice_status_text_size" />
 
         <TextView
             android:id="@+id/imeTimer"
@@ -41,14 +49,14 @@
             android:layout_height="wrap_content"
             android:text="0:00"
             android:textColor="@android:color/system_neutral1_300"
-            android:textSize="12sp" />
+            android:textSize="@dimen/voice_timer_text_size" />
     </LinearLayout>
 
-    <!-- HERO waveform (compact: 48dp tall, full-width touch not needed — decorative) -->
+    <!-- HERO waveform (compact tall, full-width touch not needed — decorative) -->
     <com.voiceime.WaveformView
         android:id="@+id/imeWave"
         android:layout_width="match_parent"
-        android:layout_height="48dp"
+        android:layout_height="@dimen/voice_wave_height"
         android:layout_marginTop="8dp" />
 
     <!-- Clipboard history strip (framework widgets, system colors only). -->
@@ -64,8 +72,8 @@
 
         <ImageButton
             android:id="@+id/imeMic"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
+            android:layout_width="@dimen/voice_mic_size"
+            android:layout_height="@dimen/voice_mic_size"
             android:background="@android:drawable/btn_default"
             android:contentDescription="@string/ime_mic_description"
             android:src="@android:drawable/ic_btn_speak_now" />
@@ -75,9 +83,9 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
-            android:minHeight="48dp"
+            android:minHeight="@dimen/voice_button_min_height"
             android:text="@string/ime_stop"
-            android:textSize="13sp"
+            android:textSize="@dimen/voice_action_text_size"
             android:visibility="gone" />
 
         <View
@@ -89,10 +97,10 @@
             android:id="@+id/imeEnter"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
+            android:minHeight="@dimen/voice_button_min_height"
             android:contentDescription="@string/ime_enter_description"
             android:text="@string/ime_enter"
-            android:textSize="13sp" />
+            android:textSize="@dimen/voice_action_text_size" />
     </LinearLayout>
 
     <!-- Second row: text buttons, visibility logic unchanged -->
@@ -107,25 +115,25 @@
             android:id="@+id/imeCancel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
+            android:minHeight="@dimen/voice_button_min_height"
             android:text="@string/ime_cancel"
-            android:textSize="13sp" />
+            android:textSize="@dimen/voice_action_text_size" />
 
         <Button
             android:id="@+id/imeRetry"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
+            android:minHeight="@dimen/voice_button_min_height"
             android:text="@string/ime_retry"
-            android:textSize="13sp" />
+            android:textSize="@dimen/voice_action_text_size" />
 
         <Button
             android:id="@+id/imeSettings"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:minHeight="48dp"
+            android:minHeight="@dimen/voice_button_min_height"
             android:text="@string/ime_settings"
-            android:textSize="13sp" />
+            android:textSize="@dimen/voice_action_text_size" />
     </LinearLayout>
 
     <TextView
@@ -135,5 +143,6 @@
         android:layout_marginTop="4dp"
         android:text="@string/ime_hint_clips"
         android:textColor="@android:color/system_neutral1_300"
-        android:textSize="11sp" />
+        android:textSize="@dimen/voice_hint_text_size" />
+    </LinearLayout>
 </LinearLayout>

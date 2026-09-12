@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tablet (smallest width >= 600dp) overrides: larger touch targets and
+     taller waveform; max-width caps keep strips centered, not stretched. -->
+<resources>
+    <dimen name="voice_wave_height">64dp</dimen>
+    <dimen name="voice_mic_size">72dp</dimen>
+    <dimen name="voice_strip_min_height">56dp</dimen>
+    <dimen name="voice_button_min_height">56dp</dimen>
+    <dimen name="voice_horizontal_padding">24dp</dimen>
+    <dimen name="voice_vertical_padding">12dp</dimen>
+    <dimen name="voice_content_max_width">560dp</dimen>
+    <dimen name="voice_wave_bar_max_width">10dp</dimen>
+    <dimen name="voice_status_text_size">14sp</dimen>
+    <dimen name="voice_timer_text_size">12sp</dimen>
+    <dimen name="voice_action_text_size">13sp</dimen>
+    <dimen name="voice_hint_text_size">11sp</dimen>
+
+    <dimen name="clip_strip_text_size">12sp</dimen>
+    <dimen name="clip_popup_height">400dp</dimen>
+    <dimen name="clip_popup_row_min_height">56dp</dimen>
+    <dimen name="clip_popup_text_size">14sp</dimen>
+</resources>

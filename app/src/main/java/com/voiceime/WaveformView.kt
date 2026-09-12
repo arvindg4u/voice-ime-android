@@ -62,17 +62,20 @@ class WaveformView @JvmOverloads constructor(
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
         val centerY = h / 2f
-        val slotW = w / BAR_COUNT
-        val barW = (slotW * BAR_WIDTH_FRACTION).coerceAtLeast(1f)
-        val radius = barW / 2f
+        // Cap bar width and center the strip so wide tablets show grouped
+        // bars instead of a sparse full-width stretch (ImeLayoutPolicy).
+        val maxBarPx = resources.getDimension(R.dimen.voice_wave_bar_max_width)
+        val geo = ImeLayoutPolicy.barGeometry(w, BAR_COUNT, maxBarPx, BAR_WIDTH_FRACTION)
+        val radius = geo.barW / 2f
+        // MIN_BAR_PX is raw px by design (hairline floor on all densities).
         for (i in 0 until BAR_COUNT) {
             val level = levels[i]
             // Idle baseline ripple so the hero never looks dead.
             val ripple = if (level <= 0f) IDLE_RIPPLE_FRACTION else 0f
             val frac = (level * BAR_MAX_FRACTION + ripple).coerceAtMost(1f)
             val barH = (frac * h).coerceAtLeast(MIN_BAR_PX)
-            val left = i * slotW + (slotW - barW) / 2f
-            canvas.drawRoundRect(left, centerY - barH / 2f, left + barW, centerY + barH / 2f, radius, radius, barPaint)
+            val left = geo.startX + i * geo.slotW + (geo.slotW - geo.barW) / 2f
+            canvas.drawRoundRect(left, centerY - barH / 2f, left + geo.barW, centerY + barH / 2f, radius, radius, barPaint)
         }
     }
 
