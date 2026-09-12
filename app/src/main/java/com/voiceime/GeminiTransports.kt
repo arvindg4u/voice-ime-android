@@ -37,6 +37,10 @@ internal val LIVE_ONLY_ERROR =
 internal val DEV_INSTRUCTION_ERROR =
     Regex("developer instruction.*not enabled|systemInstruction.*not (supported|enabled)", RegexOption.IGNORE_CASE)
 
+/** Trims, drops blanks, and dedupes keys, keeping the original order. */
+internal fun normalizeKeys(apiKeys: List<String>): List<String> =
+    apiKeys.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+
 /**
  * Opt-in Live-API routing: models whose name carries a live/native-audio
  * marker stream over the BidiGenerateContent WebSocket; everything else

@@ -150,10 +150,6 @@ class LlmClient {
         android.util.Log.d("VoiceIme", "$tag: $msg")
     }
 
-    /** Trims, drops blanks, and dedupes keys, keeping the original order. */
-    internal fun normalizeKeys(apiKeys: List<String>): List<String> =
-        apiKeys.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-
     /**
      * Live transport: streams 16 kHz mono PCM over the BidiGenerateContent
      * WebSocket and returns the accumulated input transcription with the
