@@ -201,6 +201,7 @@ class LlmClient {
         private val wsUrl = liveUrl(baseUrl)
         @Volatile private var ws: WebSocket? = null
         @Volatile private var open = false
+        @Volatile private var setupComplete = false
         private val pending = ArrayDeque<ByteArray>()
         @Volatile private var finished = false
         @Volatile private var failed = false
@@ -217,24 +218,10 @@ class LlmClient {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     try {
                         if (finished || failed) return
+                        // Setup first; audio only after the server's
+                        // setupComplete (early realtimeInput is dropped).
                         webSocket.send(buildLiveSetupJson(model, smartMode))
-                        webSocket.send(buildLiveActivityStartJson())
-                        // The mic starts instantly on tap while the TLS+WS
-                        // handshake is still in flight: flush chunks that
-                        // arrived early instead of dropping them.
-                        val drain: List<ByteArray>
-                        synchronized(pending) {
-                            open = true
-                            drain = pending.toList()
-                            pending.clear()
-                        }
-                        for (chunk in drain) {
-                            if (finished || failed) return
-                            if (!webSocket.send(buildLiveAudioMessage(chunk))) {
-                                failOnce("Network error — check connection")
-                                return
-                            }
-                        }
+                        synchronized(pending) { open = true }
                     } catch (e: Exception) {
                         failOnce("Network error — check connection")
                     }
@@ -242,6 +229,29 @@ class LlmClient {
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     logShapeOnce(text)
+                    if (!setupComplete && isLiveSetupComplete(text)) {
+                        setupComplete = true
+                        log("live-session", "setupComplete, starting turn")
+                        try {
+                            if (finished || failed) return
+                            webSocket.send(buildLiveActivityStartJson())
+                            val drain: List<ByteArray>
+                            synchronized(pending) {
+                                drain = pending.toList()
+                                pending.clear()
+                            }
+                            for (chunk in drain) {
+                                if (finished || failed) return
+                                if (!webSocket.send(buildLiveAudioMessage(chunk))) {
+                                    failOnce("Network error — check connection")
+                                    return
+                                }
+                            }
+                        } catch (e: Exception) {
+                            failOnce("Network error — check connection")
+                        }
+                        return
+                    }
                     val fragments = parseLiveInputTranscripts(text)
                     if (fragments.isNotEmpty()) {
                         if (hasLiveFinalTranscript(text)) {
@@ -312,9 +322,10 @@ class LlmClient {
         fun sendPcm(pcmChunk: ByteArray) {
             if (finished || failed) return
             synchronized(pending) {
-                if (!open) {
-                    // Handshake still in flight: buffer (cap ~30 s) for the
-                    // onOpen flush. Never fail the session for early audio.
+                if (!open || !setupComplete) {
+                    // Handshake or server setup still in flight: buffer
+                    // (cap ~30 s) for the setupComplete flush. Never fail
+                    // the session for early audio.
                     if (pending.size < 300) pending.addLast(pcmChunk)
                     return
                 }

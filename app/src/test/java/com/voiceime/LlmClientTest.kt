@@ -812,4 +812,67 @@ class LlmClientTest {
             }
         }
     }
+    @Test
+    fun `isLiveSetupComplete detects setup ack only`() {
+        assertTrue(isLiveSetupComplete("{\"setupComplete\":{}}"))
+        assertTrue(isLiveSetupComplete("{\"setup_complete\":{}}"))
+        assertFalse(isLiveSetupComplete("{\"serverContent\":{}}"))
+        assertFalse(isLiveSetupComplete("not json"))
+        assertFalse(isLiveSetupComplete(""))
+    }
+
+    @Test
+    fun `liveSession holds audio until setupComplete then streams`() {
+        val server = MockWebServer()
+        val received = CopyOnWriteArrayList<String>()
+        val serverWs = AtomicReference<WebSocket>()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                serverWs.set(webSocket)
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                received.add(text)
+                // Ack the setup like the real server: only then may audio flow.
+                if (text.contains("inputAudioTranscription")) {
+                    webSocket.send("{\"setupComplete\":{}}")
+                }
+            }
+        }))
+        server.start()
+        val session = client.startLiveSession(
+            "k", server.url("/v1beta").toString(), "m",
+            onInterim = {}, onFinal = {}, onError = {},
+        )
+        try {
+            val chunk = ByteArray(3200) { 7 }
+            // Sent before any server message: must buffer, not transmit.
+            session.sendPcm(chunk)
+            Thread.sleep(500)
+            assertTrue(received.none { it.contains("\"audio\"") })
+            // Server acks setup -> activityStart + buffered audio flush.
+            val deadline = System.currentTimeMillis() + 10_000
+            while (System.currentTimeMillis() < deadline) {
+                if (received.any { it.contains("activityStart") } &&
+                    received.any { it.contains("\"audio\"") }
+                ) break
+                Thread.sleep(50)
+            }
+            val setupIdx = received.indexOfFirst { it.contains("inputAudioTranscription") }
+            val startIdx = received.indexOfFirst { it.contains("activityStart") }
+            val audioIdx = received.indexOfFirst { it.contains("\"audio\"") }
+            assertTrue(setupIdx >= 0 && startIdx > setupIdx && audioIdx > startIdx)
+        } finally {
+            try {
+                session.close()
+            } finally {
+                try {
+                    serverWs.get()?.close(1000, null)
+                } catch (e: Exception) {
+                    // Already gone.
+                }
+                server.shutdown()
+            }
+        }
+    }
 }

@@ -207,6 +207,20 @@ internal fun hasLiveFinalTranscript(serverJson: String): Boolean {
 }
 
 /**
+ * True when a Live server message acks our setup. The server sends
+ * {"setupComplete":{}} before it accepts realtime input; audio sent
+ * earlier is dropped. Empty or invalid JSON yields false, never throws.
+ */
+internal fun isLiveSetupComplete(serverJson: String): Boolean {
+    val root = try {
+        JSONObject(serverJson)
+    } catch (e: Exception) {
+        return false
+    }
+    return root.has("setupComplete") || root.has("setup_complete")
+}
+
+/**
  * True when a Live server message ends the turn. Empty or invalid JSON
  * yields false and never throws.
  */
