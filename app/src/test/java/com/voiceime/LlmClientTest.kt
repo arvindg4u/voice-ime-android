@@ -545,7 +545,12 @@ class LlmClientTest {
         // early chunks must be flushed after setup, never dropped.
         val server = MockWebServer()
         val received = CopyOnWriteArrayList<String>()
+        val serverWs1 = AtomicReference<WebSocket>()
         server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                serverWs1.set(webSocket)
+            }
+
             override fun onMessage(webSocket: WebSocket, text: String) {
                 received.add(text)
             }
@@ -574,8 +579,14 @@ class LlmClientTest {
             try {
                 session.close()
             } finally {
+                // Close the server end first so MockWebServer.shutdown()
+                // never trips over a live connection.
                 try {
-                    // Let the close frame flush before killing the socket.
+                    serverWs1.get()?.close(1000, null)
+                } catch (e: Exception) {
+                    // Already gone.
+                }
+                try {
                     Thread.sleep(100)
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
@@ -607,8 +618,14 @@ class LlmClientTest {
             try {
                 session.close()
             } finally {
+                // Close the server end first so MockWebServer.shutdown()
+                // never trips over a live connection.
                 try {
-                    // Let the close frame flush before killing the socket.
+                    serverWs1.get()?.close(1000, null)
+                } catch (e: Exception) {
+                    // Already gone.
+                }
+                try {
                     Thread.sleep(100)
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
@@ -655,7 +672,11 @@ class LlmClientTest {
                 session.close()
             } finally {
                 try {
-                    // Let the close frame flush before killing the socket.
+                    serverWs.get()?.close(1000, null)
+                } catch (e: Exception) {
+                    // Already gone.
+                }
+                try {
                     Thread.sleep(100)
                 } catch (e: InterruptedException) {
                     Thread.currentThread().interrupt()
