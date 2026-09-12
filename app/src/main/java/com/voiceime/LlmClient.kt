@@ -218,9 +218,17 @@ class LlmClient {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     try {
                         if (finished || failed) return
+                        log("live-wire", "handshake code=" + response.code)
                         // Setup first; audio only after the server's
                         // setupComplete (early realtimeInput is dropped).
-                        webSocket.send(buildLiveSetupJson(model, smartMode))
+                        val setupJson = buildLiveSetupJson(model, smartMode)
+                        log("live-wire", "setup bytes=" + setupJson.length)
+                        val setupOk = webSocket.send(setupJson)
+                        log("live-wire", "setup send=" + setupOk)
+                        if (!setupOk) {
+                            failOnce("Network error — check connection")
+                            return
+                        }
                         synchronized(pending) { open = true }
                     } catch (e: Exception) {
                         failOnce("Network error — check connection")
@@ -234,7 +242,8 @@ class LlmClient {
                         log("live-session", "setupComplete, starting turn")
                         try {
                             if (finished || failed) return
-                            webSocket.send(buildLiveActivityStartJson())
+                            val startOk = webSocket.send(buildLiveActivityStartJson())
+                            log("live-wire", "activityStart send=" + startOk)
                             val drain: List<ByteArray>
                             synchronized(pending) {
                                 drain = pending.toList()
