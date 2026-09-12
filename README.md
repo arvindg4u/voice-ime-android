@@ -48,7 +48,9 @@ Voice → `AudioRecorder` (AudioRecord, VOICE_RECOGNITION, 16 kHz mono 16-bit PC
 `{contents:[{parts:[{inlineData:{mimeType:audio/wav,data:base64}},{text:…}}]}]}`
 → transcript joined from all candidates' parts → copied to clipboard and
 committed with `commitText` (toast: "Copied — tap to paste"). Recording stops
-via Stop button or a 5 min auto-stop. Password fields require a second mic tap
+via Stop button or a 5 min auto-stop; the mic teardown runs off the UI thread
+so Stop never janks. Granting microphone permission auto-resumes a pending mic
+tap. Password fields require a second mic tap
 to confirm. An Enter button performs the editor action named by
 `imeOptions` (label: Go / Search / Send / Next / Done / Previous, else
 "Enter"); with no action set it commits a newline. Visible in idle and

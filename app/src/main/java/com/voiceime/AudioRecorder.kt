@@ -259,6 +259,9 @@ class AudioRecorder(
      * Stops capture and returns audio as WAV plus the post-join peak level.
      * The peak is read only after joining the recording thread, so the last
      * buffer write happens-before this read (no early/zero peak race).
+     *
+     * The [recordingThread.join] is bounded (2 s) but still blocks the caller,
+     * so the service calls this from a background thread (never the UI thread).
      */
     fun stop(): Pair<ByteArray, Float> {
         recording.set(false)
@@ -279,7 +282,7 @@ class AudioRecorder(
         }
     }
 
-    /** Discards any captured audio without encoding. */
+    /** Discards any captured audio without encoding. Caller must be off the UI thread (joins). */
     fun discard() {
         recording.set(false)
         try {

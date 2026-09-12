@@ -103,6 +103,10 @@ class VoiceImeService : InputMethodService() {
     private var passwordArmed = false
     private var passwordField = false
     private var keyCursor: Int = 0
+    /** Set when mic was tapped without permission; cleared on resume or new tap. */
+    private var pendingMicResume = false
+    /** Manual-retry backoff: 0→immediate, then 2s, 4s, capped at 8s. Reset on success. */
+    private var retryBackoffMs: Long = 0L
 
     private lateinit var settings: SettingsStore
     private val llm = LlmClient()
@@ -222,6 +226,16 @@ class VoiceImeService : InputMethodService() {
         renderState()
     }
 
+    override fun onWindowShown() {
+        super.onWindowShown()
+        // Permission screen (NEW_TASK activity) covers the IME; when it
+        // returns, the window shows again — resume the pending mic tap.
+        if (pendingMicResume && state == State.IDLE) {
+            pendingMicResume = false
+            onMicTapped()
+        }
+    }
+
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         lastEditorInfo = null
@@ -278,8 +292,12 @@ class VoiceImeService : InputMethodService() {
             val intent = Intent(this, MicPermissionActivity::class.java)
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
+            // Auto-resume: when the permission screen returns and the grant
+            // is in place, start recording without a second mic tap.
+            pendingMicResume = true
             return
         }
+        pendingMicResume = false
         if (settings.apiKeys.isEmpty()) {
             showError(getString(R.string.ime_error_no_key))
             return
@@ -370,11 +388,22 @@ class VoiceImeService : InputMethodService() {
         stopTimer()
         val rec = recorder
         recorder = null
-        val (wav, peak) = try {
-            rec?.stop() ?: (ByteArray(0) to 0f)
-        } catch (e: Exception) {
-            ByteArray(0) to 0f
+        // rec.stop() joins the recording thread (bounded 2 s): keep it off
+        // the UI thread so Stop never janks, and show an intermediate state.
+        state = State.UPLOADING
+        renderState()
+        statusText?.setText(R.string.ime_status_uploading)
+        serviceScope.launch {
+            val (wav, peak) = try {
+                withContext(Dispatchers.IO) { rec?.stop() } ?: (ByteArray(0) to 0f)
+            } catch (e: Exception) {
+                ByteArray(0) to 0f
+            }
+            finishRecordingAfterStop(upload, wav, peak)
         }
+    }
+
+    private fun finishRecordingAfterStop(upload: Boolean, wav: ByteArray, peak: Float) {
         if (!upload) {
             lastWav = null
             state = State.IDLE
@@ -393,9 +422,7 @@ class VoiceImeService : InputMethodService() {
         }
         lastWav = wav
         transcribeJob?.cancel()
-        state = State.UPLOADING
-        renderState()
-        statusText?.setText(R.string.ime_status_uploading)
+        // Already in UPLOADING (set before stop completed); just launch.
         val baseUrl = settings.baseUrl
         val apiKeys = settings.apiKeys
         val model = settings.model
@@ -429,6 +456,10 @@ class VoiceImeService : InputMethodService() {
     private fun retryLast() {
         val wav = lastWav ?: return
         transcribeJob?.cancel()
+        // Exponential backoff on manual retries (immediate, 2s, 4s, cap 8s)
+        // so hammering Retry during an outage doesn't burn keys instantly.
+        val waitMs = retryBackoffMs
+        retryBackoffMs = (if (waitMs == 0L) 2000L else waitMs * 2).coerceAtMost(8000L)
         state = State.UPLOADING
         renderState()
         statusText?.setText(R.string.ime_status_uploading)
@@ -438,6 +469,7 @@ class VoiceImeService : InputMethodService() {
         val customPrompt = settings.customPrompt
         val start = keyCursor
         transcribeJob = serviceScope.launch {
+            if (waitMs > 0) kotlinx.coroutines.delay(waitMs)
             var transcript: String? = null
             var usedIndex: Int? = null
             var failure: String? = null
@@ -455,6 +487,7 @@ class VoiceImeService : InputMethodService() {
                 if (apiKeys.isNotEmpty() && used != null) {
                     keyCursor = (used + 1) % apiKeys.size
                 }
+                retryBackoffMs = 0L
                 deliverTranscript(transcript)
             } else {
                 showError(failure ?: getString(R.string.ime_error_network))
