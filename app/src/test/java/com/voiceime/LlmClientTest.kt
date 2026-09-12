@@ -530,7 +530,7 @@ class LlmClientTest {
         assertEquals(text.toByteArray(Charsets.UTF_8).size, len)
         val mask = frame.copyOfRange(2, 6)
         val masked = frame.copyOfRange(6, 6 + len)
-        val plain = ByteArray(len) { i -> (masked[i] xor mask[i % 4]) }
+        val plain = ByteArray(len) { i -> (masked[i].toInt() xor mask[i % 4].toInt()).toByte() }
         assertEquals(text, String(plain, Charsets.UTF_8))
     }
 
