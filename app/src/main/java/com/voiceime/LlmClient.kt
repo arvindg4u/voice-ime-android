@@ -262,6 +262,13 @@ class LlmClient {
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    // Full-reply forensics: server replies carry no secrets
+                    // (transcripts only), so log them whole while the
+                    // transcribe-live path is silent in production.
+                    if (shapeLogged < 6) {
+                        shapeLogged++
+                        log("live-rx", "msg#$shapeLogged len=" + text.length + " " + text.take(600))
+                    }
                     logShapeOnce(text)
                     if (!setupComplete && isLiveSetupComplete(text)) {
                         setupComplete = true
