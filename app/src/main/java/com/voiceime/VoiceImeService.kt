@@ -51,6 +51,13 @@ class VoiceImeService : InputMethodService() {
         /** Max history previews shown inline in the IME strip. */
         const val CLIP_STRIP_LIMIT = 8
 
+        /**
+         * Minimum gap between mic-blocked evaluations in onLevelChanged.
+         * The answer can only flip after ~2 s of capture silence, so there
+         * is no reason to pay a wall-clock read on every per-chunk callback.
+         */
+        private const val BLOCKED_CHECK_INTERVAL_MS = 1000L
+
         /** Label for the Enter button from the editor's action id. */
         internal fun enterLabel(actionId: Int): String = when (actionId and EditorInfo.IME_MASK_ACTION) {
             EditorInfo.IME_ACTION_GO -> "Go"
@@ -118,6 +125,7 @@ class VoiceImeService : InputMethodService() {
     private var capRunnable: Runnable? = null
     private var blockedHint: String? = null
     private var blockedHintShown: Boolean = false
+    private var lastBlockedCheckMs: Long = 0L
     private var lastWav: ByteArray? = null
     private var passwordArmed = false
     private var passwordField = false
@@ -189,10 +197,19 @@ class VoiceImeService : InputMethodService() {
         clipMoreButton?.setOnClickListener { showClipPopup() }
 
         micButton?.setOnClickListener { onMicTapped() }
-        stopButton?.setOnClickListener { finishRecording(upload = true) }
+        stopButton?.setOnClickListener {
+            finishRecording(upload = true)
+            hapticTap()
+        }
         cancelButton?.setOnClickListener { onCancelTapped() }
-        retryButton?.setOnClickListener { retryLast() }
-        settingsButton?.setOnClickListener { openSettings() }
+        retryButton?.setOnClickListener {
+            retryLast()
+            hapticTap()
+        }
+        settingsButton?.setOnClickListener {
+            openSettings()
+            hapticTap()
+        }
         enterButton?.setOnClickListener { onEnterTapped() }
 
         rootView = view
@@ -342,6 +359,7 @@ class VoiceImeService : InputMethodService() {
     }
 
     private fun onEnterTapped() {
+        hapticTap()
         val info = lastEditorInfo
         val actionId = info?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
             ?: EditorInfo.IME_ACTION_UNSPECIFIED
@@ -372,10 +390,17 @@ class VoiceImeService : InputMethodService() {
     }
 
     private fun onLevelChanged(level: Float) {
-        // Keep the 500 ms UI callback tiny: cache one string and touch the
-        // status view only when the blocked hint appears or disappears.
-        val blocked = state == State.RECORDING && recorder?.isMicMaybeBlocked() == true
+        // Keep the per-chunk UI callback tiny: it touches only the wave view.
+        // The blocked evaluation (a wall-clock read plus recorder state) runs
+        // at most once per BLOCKED_CHECK_INTERVAL_MS — its answer can only
+        // flip after 2 s of capture silence, so per-chunk checks are wasted
+        // work. The cached hint string is resolved only on the flip edge.
         waveView?.setAmplitude(level)
+        if (state != State.RECORDING) return
+        val now = System.currentTimeMillis()
+        if (now - lastBlockedCheckMs < BLOCKED_CHECK_INTERVAL_MS) return
+        lastBlockedCheckMs = now
+        val blocked = recorder?.isMicMaybeBlocked() == true
         if (blocked == blockedHintShown) return
         blockedHintShown = blocked
         if (blocked) {
@@ -414,6 +439,7 @@ class VoiceImeService : InputMethodService() {
         recordStartMs = System.currentTimeMillis()
         lastTimerSecond = -1
         blockedHintShown = false
+        lastBlockedCheckMs = 0L
         renderState()
         statusText?.setText(R.string.ime_status_recording)
         startTimer()
@@ -508,6 +534,7 @@ class VoiceImeService : InputMethodService() {
         recordStartMs = System.currentTimeMillis()
         lastTimerSecond = -1
         blockedHintShown = false
+        lastBlockedCheckMs = 0L
         renderState()
         statusText?.setText(R.string.ime_status_recording)
         startTimer()
@@ -772,9 +799,14 @@ class VoiceImeService : InputMethodService() {
     }
 
     private fun showError(message: String) {
+        // showError is the single funnel into ERROR from every recording,
+        // upload, and live path, so one haptic here covers all ERROR
+        // transitions exactly once — no tap-site or callback bookkeeping.
+        val entering = state != State.ERROR
         state = State.ERROR
         renderState()
         statusText?.text = message
+        if (entering) hapticTap()
     }
 
     private fun openSettings() {
