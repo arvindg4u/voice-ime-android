@@ -435,7 +435,7 @@ internal class LiveSocket(
             }
             header.write(mask)
             val masked = ByteArray(length) { index ->
-                (payload[index] xor mask[index % 4])
+                (payload[index].toInt() xor mask[index % 4].toInt()).toByte()
             }
             val frame = ByteArrayOutputStream(header.size() + length)
             frame.write(header.toByteArray())
