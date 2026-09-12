@@ -406,10 +406,18 @@ internal class LiveSocket(
             return encodeFrame(0x1, text.toByteArray(Charsets.UTF_8))
         }
 
+        /** Encodes and writes one masked client frame to [stream]. */
+        @Throws(java.io.IOException::class)
+        internal fun writeFrame(stream: OutputStream, opcode: Int, payload: ByteArray) {
+            val frame = encodeFrame(opcode, payload)
+            stream.write(frame)
+            stream.flush()
+        }
+
         internal fun encodeFrame(opcode: Int, payload: ByteArray): ByteArray {
             val mask = ByteArray(4).also { java.security.SecureRandom().nextBytes(it) }
             val header = ByteArrayOutputStream()
-            header.write(0x80 or (opcode and 0x0F))
+            header.write((0x80 or (opcode and 0x0F)))
             val length = payload.size
             when {
                 length < 126 -> header.write(0x80 or length)
@@ -438,7 +446,7 @@ internal class LiveSocket(
         internal fun closePayload(code: Int, reason: String): ByteArray {
             val reasonBytes = reason.toByteArray(Charsets.UTF_8)
             val out = ByteArray(2 + reasonBytes.size)
-            out[0] = ((code ushr 8) and 0xFF).toByte()
+            out[0] = ((code shr 8) and 0xFF).toByte()
             out[1] = (code and 0xFF).toByte()
             reasonBytes.copyInto(out, 2)
             return out
