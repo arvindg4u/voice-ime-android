@@ -239,7 +239,15 @@ internal fun liveUrl(baseUrl: String): String {
     } catch (e: Exception) {
         "wss"
     }
-    return "$scheme://$parsedHost$LIVE_RPC_PATH"
+    // Preserve non-default ports (URL.port is -1 when absent/default):
+    // dropping them breaks test servers and custom-port proxies.
+    val port = try {
+        java.net.URL(baseUrl).port
+    } catch (e: Exception) {
+        -1
+    }
+    val portSuffix = if (port != -1) ":$port" else ""
+    return "$scheme://$parsedHost$portSuffix$LIVE_RPC_PATH"
 }
 
 /**
