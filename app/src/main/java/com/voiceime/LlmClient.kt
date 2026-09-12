@@ -41,6 +41,24 @@ class LlmClient {
         .writeTimeout(90, TimeUnit.SECONDS)
         .build()
 
+    /**
+     * Dedicated socket client for Live sessions. Strips the server's
+     * Sec-WebSocket-Extensions accept so permessage-deflate is never
+     * negotiated: frames go out plain masked text exactly like the proven
+     * raw-socket path (device-tested FINAL). REST traffic keeps using [http].
+     */
+    private val liveHttp: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .writeTimeout(90, TimeUnit.SECONDS)
+        .addNetworkInterceptor { chain ->
+            val response = chain.proceed(chain.request())
+            response.newBuilder()
+                .removeHeader("Sec-WebSocket-Extensions")
+                .build()
+        }
+        .build()
+
     @Volatile
     private var inFlight: Call? = null
 
@@ -174,7 +192,7 @@ class LlmClient {
         // Drop any stale alias: the previous session already terminated
         // (its terminal path closed the socket); only the new one is live.
         liveSession?.close()
-        val session = LiveSession(http, baseUrl, model, key, smartMode, onInterim, onFinal, onError, ::debugLog)
+        val session = LiveSession(liveHttp, baseUrl, model, key, smartMode, onInterim, onFinal, onError, ::debugLog)
         liveSession = session
         session.open()
         return session
