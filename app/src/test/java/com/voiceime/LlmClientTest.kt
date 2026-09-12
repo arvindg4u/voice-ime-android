@@ -677,4 +677,46 @@ class LlmClientTest {
             }
         }
     }
+
+    @Test
+    fun `liveSession finish self-closes a silent server socket`() {
+        val server = MockWebServer()
+        val serverWs = AtomicReference<WebSocket>()
+        val serverClosed = CountDownLatch(1)
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                serverWs.set(webSocket)
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                serverClosed.countDown()
+            }
+        }))
+        server.start()
+        val session = client.startLiveSession(
+            "k", server.url("/v1beta").toString(), "m",
+            onInterim = {}, onFinal = {}, onError = {},
+        )
+        try {
+            val openDeadline = System.currentTimeMillis() + 10_000
+            while (serverWs.get() == null && System.currentTimeMillis() < openDeadline) {
+                Thread.sleep(20)
+            }
+            assertTrue(serverWs.get() != null)
+            // Server stays silent: no transcripts, no turnComplete.
+            session.finish(graceMs = 300)
+            assertTrue(serverClosed.await(10, TimeUnit.SECONDS))
+        } finally {
+            try {
+                session.close()
+            } finally {
+                try {
+                    serverWs.get()?.close(1000, null)
+                } catch (e: Exception) {
+                    // Already gone.
+                }
+                server.shutdown()
+            }
+        }
+    }
 }

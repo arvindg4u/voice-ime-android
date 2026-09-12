@@ -554,6 +554,11 @@ class VoiceImeService : InputMethodService() {
             // Give the server a short window to flush the final turn; the
             // interim preview already on screen is the fallback text.
             kotlinx.coroutines.delay(4000)
+            try {
+                session?.close()
+            } catch (e: Exception) {
+                // Socket already settled via turnComplete/onClosed/grace.
+            }
             val interim = liveLastInterim.trim()
             val text = liveFinalParts.toString().trim()
                 .ifEmpty { interim }

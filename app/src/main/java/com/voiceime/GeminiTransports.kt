@@ -18,6 +18,9 @@ internal const val LIVE_TIMEOUT_MS = 75_000L
 /** Grace after the last transcript fragment: close and commit instead of hanging. */
 internal const val LIVE_GRACE_MS = 8_000L
 
+/** Window after finish() before the socket self-closes without a server finalize. */
+internal const val FINISH_GRACE_MS = 6_000L
+
 /** ~100 ms of 16 kHz 16-bit mono PCM per realtimeInput message. */
 internal const val LIVE_CHUNK_BYTES = 3200
 

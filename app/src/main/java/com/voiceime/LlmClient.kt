@@ -312,9 +312,11 @@ class LlmClient {
         /**
          * Ends the turn (Stop): activityEnd + stream end, then close. The
          * server flushes the final transcript; onFinal fires on arrival and
-         * the socket closes via turnComplete/onClosed.
+         * the socket closes via turnComplete/onClosed. Safety net: if the
+         * server never finalizes, close the socket ourselves after a grace
+         * window so Stop never orphans an open connection.
          */
-        fun finish() {
+        fun finish(graceMs: Long = FINISH_GRACE_MS) {
             if (finished || failed) return
             finished = true
             try {
@@ -323,11 +325,32 @@ class LlmClient {
             } catch (e: Exception) {
                 // Send path dead; close will settle via onFailure/onClosed.
             }
+            if (graceMs <= 0) return
+            val sock = ws
+            Thread({
+                try {
+                    Thread.sleep(graceMs)
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return@Thread
+                }
+                // Still waiting on the server: give up the socket. Any late
+                // final already fired via onFinal; the caller commits from
+                // its own copies, never from this socket.
+                try {
+                    sock?.close(1000, "finish-grace")
+                } catch (e: Exception) {
+                    // Already gone.
+                }
+            }, "VoiceImeLiveFinish").apply { isDaemon = true }.start()
         }
 
-        /** Abandons the session without a transcript (Cancel / hide / destroy). */
+        /**
+         * Abandons the session without a transcript (Cancel / hide / destroy).
+         * Always attempts the socket close — even after finish(), which only
+         * sends end markers and leaves the socket server-dependent.
+         */
         fun close() {
-            if (finished || failed) return
             finished = true
             synchronized(pending) { pending.clear() }
             try {
