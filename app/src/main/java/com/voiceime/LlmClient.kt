@@ -220,32 +220,39 @@ class LlmClient {
                 log = log,
             )
             socket = raw
-            try {
-                raw.connect()
-            } catch (e: LiveSocketException) {
-                failOnce(e.message ?: "Network error — check connection", e)
-                return
-            } catch (e: Exception) {
-                failOnce("Network error — check connection", e)
-                return
-            }
-            try {
-                if (finished || failed) return
-                // Setup first; audio only after the server's setupComplete
-                // (early realtimeInput is dropped).
-                val setupJson = buildLiveSetupJson(model, smartMode)
-                log("live-wire", "setup bytes=" + setupJson.length)
-                val setupOk = raw.send(setupJson)
-                log("live-wire", "setup send=" + setupOk)
-                if (!setupOk) {
-                    failOnce("Network error — check connection")
-                    return
+            // Connect + setup MUST run off the main thread: connect() does
+            // DNS + TCP + TLS synchronously and Android throws
+            // NetworkOnMainThreadException for that (instant "network error"
+            // on mic tap). Mic capture already runs, so early audio buffers
+            // in [pending] until setupComplete flushes it.
+            Thread({
+                try {
+                    raw.connect()
+                } catch (e: LiveSocketException) {
+                    failOnce(e.message ?: "Network error — check connection", e)
+                    return@Thread
+                } catch (e: Exception) {
+                    failOnce("Network error — check connection", e)
+                    return@Thread
                 }
-                synchronized(pending) { open = true }
-            } catch (e: Exception) {
-                failOnce("Network error — check connection", e)
-            }
-            log("live-session", "open model=$model")
+                try {
+                    if (finished || failed) return@Thread
+                    // Setup first; audio only after the server's
+                    // setupComplete (early realtimeInput is dropped).
+                    val setupJson = buildLiveSetupJson(model, smartMode)
+                    log("live-wire", "setup bytes=" + setupJson.length)
+                    val setupOk = raw.send(setupJson)
+                    log("live-wire", "setup send=" + setupOk)
+                    if (!setupOk) {
+                        failOnce("Network error — check connection")
+                        return@Thread
+                    }
+                    synchronized(pending) { open = true }
+                } catch (e: Exception) {
+                    failOnce("Network error — check connection", e)
+                }
+                log("live-session", "open model=$model")
+            }, "VoiceImeLiveOpen").apply { isDaemon = true }.start()
         }
 
         private fun onSocketText(text: String) {
