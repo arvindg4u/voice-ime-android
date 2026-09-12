@@ -106,7 +106,18 @@ internal fun buildLiveSetupJson(model: String, smartMode: Boolean = false): Stri
                 .put("model", "models/$model")
                 .put(
                     "generationConfig",
-                    JSONObject().put("responseModalities", JSONArray().put("TEXT")),
+                    JSONObject()
+                        .put("responseModalities", JSONArray().put("TEXT"))
+                        // Docs-exact: inputAudioTranscription lives INSIDE
+                        // generationConfig (live-transcribe guide), not at
+                        // setup top level — the server ignores the latter
+                        // and transcription never enables (zero messages).
+                        .put(
+                            "inputAudioTranscription",
+                            JSONObject()
+                                .put("languageCodes", JSONArray())
+                                .put("mode", if (smartMode) "SMART" else "VERBATIM"),
+                        ),
                 )
                 .put(
                     "realtimeInputConfig",
@@ -114,12 +125,6 @@ internal fun buildLiveSetupJson(model: String, smartMode: Boolean = false): Stri
                         "automaticActivityDetection",
                         JSONObject().put("disabled", true),
                     ),
-                )
-                .put(
-                    "inputAudioTranscription",
-                    JSONObject()
-                        .put("languageCodes", JSONArray())
-                        .put("mode", if (smartMode) "SMART" else "VERBATIM"),
                 ),
         )
         .toString()
