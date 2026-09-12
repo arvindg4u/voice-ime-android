@@ -462,6 +462,7 @@ class VoiceImeService : InputMethodService() {
         val apiKeys = settings.apiKeys
         val model = settings.model
         val customPrompt = settings.customPrompt
+        val smartMode = settings.smartMode
         val start = keyCursor
         transcribeJob = serviceScope.launch {
             var transcript: String? = null
@@ -469,7 +470,7 @@ class VoiceImeService : InputMethodService() {
             var failure: String? = null
             try {
                 val result = withContext(Dispatchers.IO) {
-                    llm.transcribe(wav, apiKeys, baseUrl, model, start, customPrompt)
+                    llm.transcribe(wav, apiKeys, baseUrl, model, start, customPrompt, smartMode)
                 }
                 transcript = result.first
                 usedIndex = result.second
@@ -502,6 +503,7 @@ class VoiceImeService : InputMethodService() {
         val apiKeys = settings.apiKeys
         val model = settings.model
         val customPrompt = settings.customPrompt
+        val smartMode = settings.smartMode
         val start = keyCursor
         transcribeJob = serviceScope.launch {
             if (waitMs > 0) kotlinx.coroutines.delay(waitMs)
@@ -510,7 +512,7 @@ class VoiceImeService : InputMethodService() {
             var failure: String? = null
             try {
                 val result = withContext(Dispatchers.IO) {
-                    llm.transcribe(wav, apiKeys, baseUrl, model, start, customPrompt)
+                    llm.transcribe(wav, apiKeys, baseUrl, model, start, customPrompt, smartMode)
                 }
                 transcript = result.first
                 usedIndex = result.second

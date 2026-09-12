@@ -304,14 +304,98 @@ class LlmClientTest {
     }
 
     @Test
-    fun `buildLiveSetupJson carries model audio modality and transcription flag`() {
+    fun `buildLiveSetupJson carries model text modality and transcription mode`() {
         val json = JSONObject(client.buildLiveSetupJson("gemini-3.5-transcribe-live"))
         val setup = json.getJSONObject("setup")
         assertEquals("models/gemini-3.5-transcribe-live", setup.getString("model"))
         val modalities = setup.getJSONObject("generationConfig").getJSONArray("responseModalities")
         assertEquals(1, modalities.length())
-        assertEquals("AUDIO", modalities.getString(0))
-        assertTrue(setup.has("inputAudioTranscription"))
+        assertEquals("TEXT", modalities.getString(0))
+        assertEquals("VERBATIM", setup.getJSONObject("inputAudioTranscription").getString("mode"))
+    }
+
+    @Test
+    fun `buildLiveSetupJson smart flag selects SMART mode`() {
+        val json = JSONObject(client.buildLiveSetupJson("gemini-3.5-transcribe-live", smartMode = true))
+        assertEquals(
+            "SMART",
+            json.getJSONObject("setup").getJSONObject("inputAudioTranscription").getString("mode"),
+        )
+    }
+
+    @Test
+    fun `isInteractionsModel matches only the dedicated model`() {
+        assertTrue(client.isInteractionsModel("gemini-3.5-transcribe"))
+        assertTrue(client.isInteractionsModel("  GEMINI-3.5-TRANSCRIBE  "))
+        assertFalse(client.isInteractionsModel("gemini-3.5-transcribe-live"))
+        assertFalse(client.isInteractionsModel("gemini-2.5-flash"))
+        assertFalse(client.isInteractionsModel(""))
+    }
+
+    @Test
+    fun `isDevInstructionError matches only the 400 developer-instruction body`() {
+        assertTrue(
+            client.isDevInstructionError(
+                400,
+                """{"error":{"message":"Developer instruction is not enabled for this model"}}""",
+            ),
+        )
+        assertFalse(client.isDevInstructionError(400, """{"error":{"message":"bad request"}}"""))
+        assertFalse(client.isDevInstructionError(401, "Developer instruction is not enabled"))
+        assertFalse(client.isDevInstructionError(400, ""))
+    }
+
+    @Test
+    fun `buildInteractionsRequestJson carries model input and verbatim default`() {
+        val json = JSONObject(
+            client.buildInteractionsRequestJson("QUJD", "gemini-3.5-transcribe"),
+        )
+        assertEquals("gemini-3.5-transcribe", json.getString("model"))
+        val input = json.getJSONArray("input")
+        assertEquals("text", input.getJSONObject(0).getString("type"))
+        val audio = input.getJSONObject(1)
+        assertEquals("audio", audio.getString("type"))
+        assertEquals("QUJD", audio.getString("data"))
+        assertEquals("audio/wav", audio.getString("mime_type"))
+        assertEquals(
+            "verbatim",
+            json.getJSONObject("generation_config")
+                .getJSONObject("transcription_config").getString("mode"),
+        )
+    }
+
+    @Test
+    fun `buildInteractionsRequestJson smart flag and custom prompt`() {
+        val json = JSONObject(
+            client.buildInteractionsRequestJson("QUJD", "gemini-3.5-transcribe", "Keep Hinglish", smartMode = true),
+        )
+        assertEquals(
+            "smart",
+            json.getJSONObject("generation_config")
+                .getJSONObject("transcription_config").getString("mode"),
+        )
+        assertTrue(json.getJSONArray("input").getJSONObject(0).getString("text").contains("Keep Hinglish"))
+    }
+
+    @Test
+    fun `parseInteractionsTranscript reads output_text then steps`() {
+        assertEquals("hello", client.parseInteractionsTranscript("""{"output_text":"hello"}"""))
+        val steps = """{"steps":[{"content":[{"type":"text","text":"hi "},{"type":"text","text":"there"}]}]}"""
+        assertEquals("hi there", client.parseInteractionsTranscript(steps))
+        try {
+            client.parseInteractionsTranscript("""{"output_text":"  "}""")
+            fail("expected TranscribeException")
+        } catch (e: TranscribeException) {
+            assertTrue(e.message!!.isNotEmpty())
+        }
+    }
+
+    @Test
+    fun `interactionsUrl appends interactions path`() {
+        assertEquals(
+            "https://example.com/v1/interactions",
+            client.interactionsUrl("https://example.com/v1/"),
+        )
     }
 
     @Test

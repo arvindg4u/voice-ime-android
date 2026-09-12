@@ -53,12 +53,18 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<Button>(R.id.settingsOpenClipboard).setOnClickListener {
             startActivity(Intent(this, ClipboardHistoryActivity::class.java))
         }
+        val smartSwitch = findViewById<Switch>(R.id.settingsSmartToggle)
+        smartSwitch.isChecked = settings.smartMode
+        smartSwitch.setOnCheckedChangeListener { _, checked ->
+            settings.smartMode = checked
+        }
     }
 
     override fun onResume() {
         super.onResume()
         findViewById<Switch>(R.id.settingsClipboardToggle)?.isChecked =
             ClipboardHistoryActivity.isEnabled(this)
+        findViewById<Switch>(R.id.settingsSmartToggle)?.isChecked = settings.smartMode
     }
 
     private fun setClipHistoryEnabled(checked: Boolean) {
@@ -104,6 +110,7 @@ class SettingsActivity : AppCompatActivity() {
                     llm.transcribe(
                         AudioRecorder.testToneWav(), keys, url, model,
                         customPrompt = customPrompt,
+                        smartMode = settings.smartMode,
                     )
                 }
                 "${transcript.take(100)} (key ${usedIndex + 1}/${keys.size})"

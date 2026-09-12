@@ -20,6 +20,7 @@ class SettingsStore(context: Context) {
         private const val KEY_API_KEY = "api_key"
         private const val KEY_MODEL = "model"
         private const val KEY_CUSTOM_PROMPT = "custom_prompt"
+        private const val KEY_SMART_MODE = "smart_mode"
     }
 
     private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
@@ -64,6 +65,17 @@ class SettingsStore(context: Context) {
         get() = prefs.getString(KEY_CUSTOM_PROMPT, "").orEmpty().trim()
         set(value) {
             prefs.edit().putString(KEY_CUSTOM_PROMPT, value.trim().take(MAX_CUSTOM_PROMPT)).apply()
+        }
+
+    /**
+     * Smart transcription for transcribe-family transports (Interactions
+     * mode:"smart", Live inputAudioTranscription mode:"SMART"): cleaned,
+     * structured output instead of verbatim. Default ON for dictation.
+     */
+    var smartMode: Boolean
+        get() = prefs.getBoolean(KEY_SMART_MODE, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_SMART_MODE, value).apply()
         }
 
     /** Trim trailing slashes and legacy "/chat/completions"; empty falls back to default. */
