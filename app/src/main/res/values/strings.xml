@@ -43,4 +43,23 @@
     <string name="mic_needed">Microphone needed for voice input</string>
     <string name="settings_section_connection">Connection</string>
     <string name="settings_section_personalize">Personalize</string>
+    <string name="settings_section_clipboard">Clipboard</string>
+    <string name="settings_clipboard_history">Save clipboard history</string>
+    <string name="settings_open_clipboard">Open clipboard manager</string>
+
+    <!-- Clipboard history -->
+    <string name="clipboard_more">More</string>
+    <string name="clipboard_enable">Clipboard history</string>
+    <string name="clipboard_disclosure">Saves copied text on this device only. Nothing leaves the device. Password fields are never saved.</string>
+    <string name="clipboard_search">Search history</string>
+    <string name="clipboard_pin">Pin</string>
+    <string name="clipboard_unpin">Unpin</string>
+    <string name="clipboard_delete">Delete</string>
+    <string name="clipboard_clear_unpinned">Clear unpinned</string>
+    <string name="clipboard_clear_all">Clear all</string>
+    <string name="clipboard_clear_all_confirm">Delete all clipboard history?</string>
+    <string name="clipboard_open_manager">Open clipboard manager</string>
+    <string name="clipboard_max_count">Max saved items</string>
+    <string name="clipboard_empty">No saved clips yet</string>
+    <string name="clipboard_too_large">Clip too large — not saved</string>
 </resources>

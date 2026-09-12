@@ -36,5 +36,9 @@
             android:name=".MicPermissionActivity"
             android:exported="false"
             android:theme="@style/Theme.VoiceIme.Transparent" />
-    </application>
+
+        <activity
+            android:name=".ClipboardHistoryActivity"
+            android:exported="false" />
+</application>
 </manifest>

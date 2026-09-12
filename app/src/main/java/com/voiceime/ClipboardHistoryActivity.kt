@@ -1,0 +1,218 @@
+package com.voiceime
+
+import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Build
+import android.os.Bundle
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.BaseAdapter
+import android.widget.Button
+import android.widget.EditText
+import android.widget.Filter
+import android.widget.Filterable
+import android.widget.ListView
+import android.widget.TextView
+import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Full clipboard-history manager (framework widgets only, no RecyclerView).
+ * FLAG_SECURE: history never appears in screenshots or the recent-apps thumbnail.
+ */
+class ClipboardHistoryActivity : AppCompatActivity() {
+
+    private lateinit var store: ClipboardStore
+    private lateinit var adapter: EntryAdapter
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        setContentView(R.layout.activity_clipboard_history)
+
+        store = ClipboardStore.forContext(this)
+        store.enabled = historyEnabled()
+        adapter = EntryAdapter(
+            context = this,
+            onTap = { entry -> commitEntry(entry) },
+            onPin = { entry ->
+                scope.launch {
+                    val updated = withContext(Dispatchers.IO) { store.togglePin(entry.id) }
+                    adapter.setEntries(updated)
+                }
+            },
+            onDelete = { entry ->
+                scope.launch {
+                    val updated = withContext(Dispatchers.IO) { store.deleteAt(entry.id) }
+                    adapter.setEntries(updated)
+                }
+            },
+        )
+
+        findViewById<ListView>(R.id.clipList).adapter = adapter
+
+        val enableSwitch = findViewById<SwitchCompat>(R.id.clipEnable)
+        enableSwitch.isChecked = store.enabled
+        enableSwitch.setOnCheckedChangeListener { _, checked ->
+            setHistoryEnabled(checked)
+            scope.launch {
+                withContext(Dispatchers.IO) { store.setEnabled(checked) }
+                adapter.setEntries(store.snapshot())
+            }
+        }
+
+        findViewById<EditText>(R.id.clipSearch).addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+            override fun afterTextChanged(s: Editable?) {
+                adapter.filter.filter(s?.toString().orEmpty())
+            }
+        })
+
+        findViewById<Button>(R.id.clipClearUnpinned).setOnClickListener {
+            scope.launch {
+                val updated = withContext(Dispatchers.IO) { store.clearUnpinned() }
+                adapter.setEntries(updated)
+            }
+        }
+        findViewById<Button>(R.id.clipClearAll).setOnClickListener {
+            AlertDialog.Builder(this)
+                .setMessage(R.string.clipboard_clear_all_confirm)
+                .setPositiveButton(android.R.string.ok) { _, _ ->
+                    scope.launch {
+                        withContext(Dispatchers.IO) { store.clearAll() }
+                        adapter.setEntries(store.snapshot())
+                    }
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        scope.launch {
+            val entries = store.loadAsync()
+            adapter.setEntries(entries)
+        }
+    }
+
+    override fun onDestroy() {
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    private fun commitEntry(entry: ClipboardEntry) {
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("voice-ime", entry.text))
+        } catch (e: Exception) {
+            // Clipboard unavailable; nothing to commit.
+            return
+        }
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
+            Toast.makeText(this, R.string.ime_copied_paste, Toast.LENGTH_SHORT).show()
+        }
+        finish()
+    }
+
+    private fun historyEnabled(): Boolean =
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
+
+    private fun setHistoryEnabled(value: Boolean) {
+        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, value).apply()
+    }
+
+    companion object {
+        const val PREFS = "voice_ime_clipboard"
+        const val KEY_ENABLED = "history_enabled"
+        const val KEY_MAX_COUNT = "history_max_count"
+        const val KEY_TTL_MS = "history_ttl_ms"
+
+        fun isEnabled(context: Context): Boolean =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
+
+        fun maxCount(context: Context): Int =
+            ClipboardPolicy.clampMaxUnpinned(
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getInt(KEY_MAX_COUNT, ClipboardPolicy.DEFAULT_MAX_UNPINNED),
+            )
+
+        fun ttlMs(context: Context): Long =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getLong(KEY_TTL_MS, ClipboardPolicy.DEFAULT_TTL_MS)
+    }
+
+    private class EntryAdapter(
+        private val context: Context,
+        private val onTap: (ClipboardEntry) -> Unit,
+        private val onPin: (ClipboardEntry) -> Unit,
+        private val onDelete: (ClipboardEntry) -> Unit,
+    ) : BaseAdapter(), Filterable {
+
+        private var all: List<ClipboardEntry> = emptyList()
+        private var shown: List<ClipboardEntry> = emptyList()
+        private val inflater = LayoutInflater.from(context)
+
+        fun setEntries(entries: List<ClipboardEntry>) {
+            all = entries
+            shown = entries
+            filter.filter(currentQuery)
+            notifyDataSetChanged()
+        }
+
+        private var currentQuery: String = ""
+
+        override fun getCount(): Int = shown.size
+        override fun getItem(position: Int): ClipboardEntry = shown[position]
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = convertView
+                ?: inflater.inflate(R.layout.item_clipboard_entry, parent, false)
+            val entry = getItem(position)
+            view.findViewById<TextView>(R.id.clipText).text = ClipboardPolicy.sanitizePreview(entry)
+            view.findViewById<Button>(R.id.clipPin).text = if (entry.isPinned) {
+                context.getString(R.string.clipboard_unpin)
+            } else {
+                context.getString(R.string.clipboard_pin)
+            }
+            view.findViewById<Button>(R.id.clipPin).setOnClickListener { onPin(entry) }
+            view.findViewById<Button>(R.id.clipDelete).setOnClickListener { onDelete(entry) }
+            view.setOnClickListener { onTap(entry) }
+            return view
+        }
+
+        override fun getFilter(): Filter = object : Filter() {
+            override fun performFiltering(constraint: CharSequence?): FilterResults {
+                currentQuery = constraint?.toString().orEmpty()
+                val q = currentQuery.trim()
+                val result = if (q.isEmpty()) all else all.filter { it.text.contains(q, ignoreCase = true) }
+                return FilterResults().apply {
+                    values = result
+                    count = result.size
+                }
+            }
+
+            @Suppress("UNCHECKED_CAST")
+            override fun publishResults(constraint: CharSequence?, results: FilterResults?) {
+                shown = (results?.values as? List<ClipboardEntry>) ?: all
+                notifyDataSetChanged()
+            }
+        }
+    }
+}

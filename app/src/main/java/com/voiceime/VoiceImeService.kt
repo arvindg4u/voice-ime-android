@@ -2,21 +2,29 @@ package com.voiceime
 
 import android.Manifest
 import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.inputmethodservice.InputMethodService
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PersistableBundle
 import android.text.InputType
 import android.util.Log
+import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.widget.BaseAdapter
 import android.widget.Button
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ListView
+import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -40,6 +48,9 @@ class VoiceImeService : InputMethodService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     companion object {
+        /** Max history previews shown inline in the IME strip. */
+        const val CLIP_STRIP_LIMIT = 8
+
         /** Label for the Enter button from the editor's action id. */
         internal fun enterLabel(actionId: Int): String = when (actionId and EditorInfo.IME_MASK_ACTION) {
             EditorInfo.IME_ACTION_GO -> "Go"
@@ -87,6 +98,14 @@ class VoiceImeService : InputMethodService() {
     private var settingsButton: Button? = null
     private var enterButton: Button? = null
     private var lastEditorInfo: EditorInfo? = null
+    private var clipboardStore: ClipboardStore? = null
+    private var clipStripScroll: HorizontalScrollView? = null
+    private var clipStrip: LinearLayout? = null
+    private var clipMoreButton: Button? = null
+    private var clipEntries: List<ClipboardEntry> = emptyList()
+    private var clipListener: ClipboardManager.OnPrimaryClipChangedListener? = null
+    private var lastClipFingerprint: Int = 0
+    private var clipPopup: PopupWindow? = null
 
     private var state: State = State.IDLE
     private var recorder: AudioRecorder? = null
@@ -164,6 +183,10 @@ class VoiceImeService : InputMethodService() {
         settingsButton = view.findViewById(R.id.imeSettings)
         enterButton = view.findViewById(R.id.imeEnter)
         actionsRow = view.findViewById(R.id.imeActionsRow)
+        clipStripScroll = view.findViewById(R.id.imeClipStripScroll)
+        clipStrip = view.findViewById(R.id.imeClipStrip)
+        clipMoreButton = view.findViewById(R.id.imeClipMore)
+        clipMoreButton?.setOnClickListener { showClipPopup() }
 
         micButton?.setOnClickListener { onMicTapped() }
         stopButton?.setOnClickListener { finishRecording(upload = true) }
@@ -212,6 +235,9 @@ class VoiceImeService : InputMethodService() {
         settingsButton = null
         enterButton = null
         actionsRow = null
+        clipStripScroll = null
+        clipStrip = null
+        clipMoreButton = null
         rootView = layout
         renderState()
         return layout
@@ -223,11 +249,15 @@ class VoiceImeService : InputMethodService() {
         passwordField = isPasswordField(info)
         passwordArmed = false
         Log.e("VoiceIme", "start input state=$state fallback=$fallbackMode restarting=$restarting")
+        applyClipPrefs()
+        refreshClipStrip()
+        registerClipListener()
         renderState()
     }
 
     override fun onWindowShown() {
         super.onWindowShown()
+        registerClipListener()
         // Permission screen (NEW_TASK activity) covers the IME; when it
         // returns, the window shows again — resume the pending mic tap.
         if (pendingMicResume && state == State.IDLE) {
@@ -239,15 +269,20 @@ class VoiceImeService : InputMethodService() {
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         lastEditorInfo = null
+        unregisterClipListener()
         cancelWork()
     }
 
     override fun onWindowHidden() {
         super.onWindowHidden()
+        dismissClipPopup()
+        unregisterClipListener()
         cancelWork()
     }
 
     override fun onDestroy() {
+        dismissClipPopup()
+        unregisterClipListener()
         cancelWork()
         serviceScope.cancel()
         mainHandler.removeCallbacksAndMessages(null)
@@ -501,10 +536,14 @@ class VoiceImeService : InputMethodService() {
             return
         }
         lastWav = null
+        maybeSaveClip(text)
         // Clipboard first so the text survives even if commit fails.
         try {
             val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("voice-ime", text))
+            val clip = ClipData.newPlainText("voice-ime", text)
+            if (passwordField) markClipSensitive(clip.description)
+            cm.setPrimaryClip(clip)
+            lastClipFingerprint = ClipboardPolicy.clipFingerprint("voice-ime", text, "text/plain")
         } catch (e: Exception) {
             // Clipboard unavailable; still try commitText.
         }
@@ -524,9 +563,12 @@ class VoiceImeService : InputMethodService() {
         }
         state = State.IDLE
         renderState()
+        refreshClipStrip()
         statusText?.setText(R.string.ime_status_idle)
         hapticConfirm()
-        Toast.makeText(this, R.string.ime_copied_paste, Toast.LENGTH_SHORT).show()
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
+            Toast.makeText(this, R.string.ime_copied_paste, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun showError(message: String) {
@@ -629,8 +671,317 @@ class VoiceImeService : InputMethodService() {
         capRunnable = null
     }
 
-    private fun isPasswordField(info: EditorInfo?): Boolean {
-        if (info == null) return false
+    // ---- Clipboard history (opt-in, text-only) ----
+
+    private fun store(): ClipboardStore? {
+        var s = clipboardStore
+        if (s == null) {
+            s = ClipboardStore.forContext(this)
+            clipboardStore = s
+        }
+        return s
+    }
+
+    private fun applyClipPrefs() {
+        val s = store() ?: return
+        s.enabled = ClipboardHistoryActivity.isEnabled(this)
+        s.maxUnpinned = ClipboardHistoryActivity.maxCount(this)
+        s.ttlMs = ClipboardHistoryActivity.ttlMs(this)
+    }
+
+    private fun refreshClipStrip() {
+        val strip = clipStrip ?: return
+        val scroll = clipStripScroll ?: return
+        if (!ClipboardHistoryActivity.isEnabled(this)) {
+            clipEntries = emptyList()
+            mainHandler.post {
+                strip.removeAllViews()
+                clipMoreButton?.let { strip.addView(it) }
+                scroll.visibility = View.GONE
+            }
+            return
+        }
+        serviceScope.launch {
+            val s = store()
+            val entries = try {
+                withContext(Dispatchers.IO) {
+                    if (s == null) emptyList() else s.load()
+                }
+            } catch (e: Exception) {
+                emptyList()
+            }
+            clipEntries = entries
+            mainHandler.post { renderClipStrip(entries) }
+        }
+    }
+
+    private fun renderClipStrip(entries: List<ClipboardEntry>) {
+        val strip = clipStrip ?: return
+        val scroll = clipStripScroll ?: return
+        if (passwordField) {
+            strip.removeAllViews()
+            scroll.visibility = View.GONE
+            return
+        }
+        strip.removeAllViews()
+        var visible = entries.take(CLIP_STRIP_LIMIT)
+        if (visible.isEmpty()) {
+            clipMoreButton?.let { strip.addView(it) }
+            scroll.visibility = View.GONE
+            return
+        }
+        for (entry in visible) {
+            val button = Button(this).apply {
+                text = ClipboardPolicy.sanitizePreview(entry)
+                textSize = 12f
+                minHeight = 0
+                minimumHeight = 40 * resources.displayMetrics.density.toInt().coerceAtLeast(1)
+                setOnClickListener { commitClipEntry(entry) }
+                setOnLongClickListener {
+                    serviceScope.launch {
+                        val updated = try {
+                            withContext(Dispatchers.IO) { store()?.deleteAt(entry.id) }
+                        } catch (e: Exception) {
+                            null
+                        }
+                        if (updated != null) {
+                            clipEntries = updated
+                            mainHandler.post { renderClipStrip(updated) }
+                        }
+                    }
+                    true
+                }
+            }
+            strip.addView(button)
+        }
+        val more = clipMoreButton
+        if (more != null) {
+            (more.parent as? ViewGroup)?.removeView(more)
+            more.visibility = if (entries.size > CLIP_STRIP_LIMIT) View.VISIBLE else View.GONE
+            strip.addView(more)
+        }
+        scroll.visibility = View.VISIBLE
+    }
+
+    private fun commitClipEntry(entry: ClipboardEntry) {
+        if (entry.text.isBlank()) return
+        try {
+            val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = ClipData.newPlainText("voice-ime", entry.text)
+            if (passwordField || entry.isSensitive) markClipSensitive(clip.description)
+            cm.setPrimaryClip(clip)
+            lastClipFingerprint = ClipboardPolicy.clipFingerprint("voice-ime", entry.text, "text/plain")
+        } catch (e: Exception) {
+            return
+        }
+        val ic = currentInputConnection ?: return
+        try {
+            ic.finishComposingText()
+            ic.beginBatchEdit()
+            try {
+                ic.commitText(entry.text, 1)
+            } finally {
+                ic.endBatchEdit()
+            }
+        } catch (e: Exception) {
+            // Clipboard already holds the text; nothing further to do.
+        }
+        hapticConfirm()
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
+            Toast.makeText(this, R.string.ime_copied_paste, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Captures our own transcript into history (point (a)): before clipboard overwrite. */
+    private fun maybeSaveClip(text: String) {
+        if (!ClipboardHistoryActivity.isEnabled(this)) return
+        if (passwordField) return
+        if (!ClipboardPolicy.shouldCapture(text)) {
+            if (text.length > ClipboardPolicy.MAX_ITEM_CHARS) {
+                mainHandler.post {
+                    Toast.makeText(this, R.string.clipboard_too_large, Toast.LENGTH_SHORT).show()
+                }
+            }
+            return
+        }
+        serviceScope.launch {
+            try {
+                withContext(Dispatchers.IO) { store()?.add(text) }
+            } catch (e: Exception) {
+                // History is best-effort; delivery already succeeded.
+            }
+        }
+    }
+
+    private fun registerClipListener() {
+        if (!ClipboardHistoryActivity.isEnabled(this)) return
+        if (clipListener != null) return
+        val cm = try {
+            getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        } catch (e: Exception) {
+            return
+        }
+        val listener = ClipboardManager.OnPrimaryClipChangedListener {
+            mainHandler.post { onPrimaryClipChanged(cm) }
+        }
+        clipListener = listener
+        try {
+            cm.addPrimaryClipChangedListener(listener)
+        } catch (e: Exception) {
+            clipListener = null
+        }
+    }
+
+    private fun unregisterClipListener() {
+        val listener = clipListener ?: return
+        clipListener = null
+        try {
+            val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            cm.removePrimaryClipChangedListener(listener)
+        } catch (e: Exception) {
+            // Listener already gone; nothing to do.
+        }
+    }
+
+    /** Point (b): external copies while the IME is visible. Never coerces at bind time. */
+    private fun onPrimaryClipChanged(cm: ClipboardManager) {
+        if (!ClipboardHistoryActivity.isEnabled(this)) return
+        if (passwordField) return
+        val info = lastEditorInfo
+        if (info != null && ClipboardPolicy.hasNoPersonalizedLearning(info.imeOptions)) return
+        val hasClip = try {
+            cm.hasPrimaryClip()
+        } catch (e: Exception) {
+            false
+        }
+        if (!hasClip) return
+        val desc = try {
+            cm.primaryClipDescription
+        } catch (e: Exception) {
+            null
+        }
+        if (desc == null || !desc.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN)) return
+        if (hasSensitiveExtra(desc)) return
+        val label = try {
+            desc.label?.toString()
+        } catch (e: Exception) {
+            null
+        }
+        val text = try {
+            val item = cm.primaryClip?.getItemAt(0) ?: return
+            // Explicit user copy into the visible IME: coerce only here, never at bind.
+            item.coerceToText(this)?.toString()
+        } catch (e: Exception) {
+            return
+        }
+        if (text.isNullOrBlank()) return
+        val fingerprint = ClipboardPolicy.clipFingerprint(label, text, ClipDescription.MIMETYPE_TEXT_PLAIN)
+        if (fingerprint == lastClipFingerprint) return
+        lastClipFingerprint = fingerprint
+        if (!ClipboardPolicy.shouldCapture(text)) return
+        serviceScope.launch {
+            val updated = try {
+                withContext(Dispatchers.IO) { store()?.add(text) } ?: return@launch
+            } catch (e: Exception) {
+                return@launch
+            }
+            clipEntries = updated
+            mainHandler.post { renderClipStrip(updated) }
+        }
+    }
+
+    private fun hasSensitiveExtra(desc: ClipDescription): Boolean {
+        if (android.os.Build.VERSION.SDK_INT < 33) return false
+        return try {
+            val extras = desc.extras ?: return false
+            extras.containsKey(ClipboardPolicy.EXTRA_IS_SENSITIVE)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun markClipSensitive(desc: ClipDescription) {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        try {
+            val extras = desc.extras ?: PersistableBundle()
+            extras.putBoolean(ClipboardPolicy.EXTRA_IS_SENSITIVE, true)
+            desc.extras = extras
+        } catch (e: Exception) {
+            // Sensitive flag is best-effort on older platforms.
+        }
+    }
+
+    private fun showClipPopup() {
+        dismissClipPopup()
+        if (passwordField) return
+        val root = rootView ?: return
+        val entries = clipEntries
+        if (entries.isEmpty()) {
+            Toast.makeText(this, R.string.clipboard_empty, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val list = ListView(this).apply {
+            adapter = object : BaseAdapter() {
+                override fun getCount(): Int = entries.size
+                override fun getItem(position: Int): ClipboardEntry = entries[position]
+                override fun getItemId(position: Int): Long = position.toLong()
+                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                    val row = convertView as? TextView ?: TextView(this@VoiceImeService).apply {
+                        minHeight = 48 * resources.displayMetrics.density.toInt().coerceAtLeast(1)
+                        textSize = 14f
+                    }
+                    row.text = ClipboardPolicy.sanitizePreview(getItem(position))
+                    return row
+                }
+            }
+            setOnItemClickListener { _, _, position, _ ->
+                dismissClipPopup()
+                commitClipEntry(entries[position])
+            }
+            setOnItemLongClickListener { _, _, position, _ ->
+                val removed = entries[position]
+                serviceScope.launch {
+                    val updated = try {
+                        withContext(Dispatchers.IO) { store()?.deleteAt(removed.id) }
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (updated != null) {
+                        clipEntries = updated
+                        mainHandler.post {
+                            dismissClipPopup()
+                            renderClipStrip(updated)
+                            if (updated.isNotEmpty()) showClipPopup()
+                        }
+                    }
+                }
+                true
+            }
+        }
+        val popup = PopupWindow(
+            list,
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            (320 * resources.displayMetrics.density).toInt(),
+            true,
+        )
+        clipPopup = popup
+        try {
+            popup.showAtLocation(root, Gravity.BOTTOM, 0, 0)
+        } catch (e: Exception) {
+            clipPopup = null
+        }
+    }
+
+    private fun dismissClipPopup() {
+        try {
+            clipPopup?.dismiss()
+        } catch (e: Exception) {
+            // Already dismissed.
+        }
+        clipPopup = null
+    }
+
+    private fun isPasswordField(info: EditorInfo?): Boolean {        if (info == null) return false
         val cls = info.inputType and InputType.TYPE_MASK_CLASS
         if (cls != InputType.TYPE_CLASS_TEXT && cls != InputType.TYPE_CLASS_NUMBER) return false
         val variation = info.inputType and InputType.TYPE_MASK_VARIATION

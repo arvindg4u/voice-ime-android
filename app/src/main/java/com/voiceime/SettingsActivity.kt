@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.Switch
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
@@ -44,6 +45,27 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<Button>(R.id.settingsEnableKeyboard).setOnClickListener {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
         }
+        val clipToggle = findViewById<Switch>(R.id.settingsClipboardToggle)
+        clipToggle.isChecked = ClipboardHistoryActivity.isEnabled(this)
+        clipToggle.setOnCheckedChangeListener { _, checked ->
+            setClipHistoryEnabled(checked)
+        }
+        findViewById<Button>(R.id.settingsOpenClipboard).setOnClickListener {
+            startActivity(Intent(this, ClipboardHistoryActivity::class.java))
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        findViewById<Switch>(R.id.settingsClipboardToggle)?.isChecked =
+            ClipboardHistoryActivity.isEnabled(this)
+    }
+
+    private fun setClipHistoryEnabled(checked: Boolean) {
+        getSharedPreferences(
+            ClipboardHistoryActivity.PREFS,
+            android.content.Context.MODE_PRIVATE,
+        ).edit().putBoolean(ClipboardHistoryActivity.KEY_ENABLED, checked).apply()
     }
 
     private fun save() {
