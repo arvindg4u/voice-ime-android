@@ -434,7 +434,7 @@ class VoiceImeService : InputMethodService() {
      */
     private var liveStreamingSession: LlmClient.LiveSession? = null
     private val liveFinalParts = StringBuilder()
-    private var liveLastInterim = 
+    private var liveLastInterim = ""
 
     private fun startLiveStreaming() {
         cancelWork()
