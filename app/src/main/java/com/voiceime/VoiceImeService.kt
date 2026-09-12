@@ -386,6 +386,14 @@ class VoiceImeService : InputMethodService() {
 
     private fun startRecording() {
         cancelWork()
+        // Live-marker models stream over a continuous WebSocket session
+        // (interim hypotheses replace the preview live); everything else
+        // records-then-uploads the one-shot path below untouched.
+        if (requiresLive(settings.model)) {
+            startLiveStreaming()
+            if (state == State.RECORDING) hapticTap()
+            return
+        }
         val rec = AudioRecorder(
             this@VoiceImeService,
             onLevel = { level ->
@@ -418,8 +426,151 @@ class VoiceImeService : InputMethodService() {
         mainHandler.postDelayed(cap, 300_000)
     }
 
+    /**
+     * Live streaming path (cookbook pattern): socket opens on mic tap, mic
+     * buffers stream while speaking, interim hypotheses REPLACE the status
+     * preview live, Stop closes the turn and the final commits. The one-shot
+     * record→upload path is untouched for non-live models.
+     */
+    private var liveStreamingSession: LlmClient.LiveSession? = null
+    private val liveFinalParts = StringBuilder()
+
+    private fun startLiveStreaming() {
+        cancelWork()
+        val keys = llm.normalizeKeys(settings.apiKeys)
+        if (keys.isEmpty()) {
+            showError(getString(R.string.ime_error_no_key))
+            return
+        }
+        val model = settings.model
+        val session = llm.startLiveSession(
+            key = keys[keyCursor % keys.size],
+            baseUrl = settings.baseUrl,
+            model = model,
+            smartMode = settings.smartMode,
+            onInterim = { preview ->
+                mainHandler.post {
+                    if (state == State.RECORDING) statusText?.text = preview
+                }
+            },
+            onFinal = { text ->
+                mainHandler.post {
+                    liveFinalParts.append(text)
+                    statusText?.text = liveFinalParts.toString()
+                }
+            },
+            onError = { message ->
+                mainHandler.post { showError(message) }
+            },
+        )
+        liveStreamingSession = session
+        val rec = AudioRecorder(
+            this@VoiceImeService,
+            onLevel = { level ->
+                mainHandler.post {
+                    onLevelChanged(level)
+                }
+            },
+            onPcmChunk = { pcm ->
+                session.sendPcm(pcm)
+            },
+        )
+        recorder = rec
+        try {
+            rec.start()
+        } catch (e: IllegalStateException) {
+            recorder = null
+            session.close()
+            liveStreamingSession = null
+            showError(getString(R.string.ime_error_mic))
+            return
+        }
+        liveFinalParts.setLength(0)
+        state = State.RECORDING
+        recordStartMs = System.currentTimeMillis()
+        lastTimerSecond = -1
+        blockedHintShown = false
+        renderState()
+        statusText?.setText(R.string.ime_status_recording)
+        startTimer()
+        capRunnable?.let { mainHandler.removeCallbacks(it) }
+        val cap = Runnable { if (state == State.RECORDING) finishRecording(upload = true) }
+        capRunnable = cap
+        mainHandler.postDelayed(cap, 300_000)
+        if (state == State.RECORDING) hapticTap()
+    }
+
+    /**
+     * Stop on a Live session: close the turn and commit whatever finalized
+     * text arrived (plus any last interim preview as fallback). Never hangs:
+     * no 75 s wait — the socket already streamed everything live.
+     */
+    private fun finishLiveStreaming(upload: Boolean) {
+        stopTimer()
+        val rec = recorder
+        recorder = null
+        val session = liveStreamingSession
+        liveStreamingSession = null
+        state = State.UPLOADING
+        renderState()
+        statusText?.setText(R.string.ime_status_uploading)
+        serviceScope.launch {
+            val peak = try {
+                withContext(Dispatchers.IO) { rec?.stop() }?.second ?: 0f
+            } catch (e: Exception) {
+                0f
+            }
+            if (!upload) {
+                try {
+                    session?.close()
+                } catch (e: Exception) {
+                    // Already gone.
+                }
+                lastWav = null
+                state = State.IDLE
+                renderState()
+                return@launch
+            }
+            if (AudioRecorder.isSilent(peak)) {
+                try {
+                    session?.close()
+                } catch (e: Exception) {
+                    // Already gone.
+                }
+                lastWav = null
+                showError(getString(R.string.ime_error_no_speech))
+                return@launch
+            }
+            try {
+                session?.finish()
+            } catch (e: Exception) {
+                // Session already dead; fall through to whatever arrived.
+            }
+            // Give the server a short window to flush the final turn; the
+            // interim preview already on screen is the fallback text.
+            kotlinx.coroutines.delay(4000)
+            val text = liveFinalParts.toString().trim()
+                .ifEmpty { statusText?.text?.toString().orEmpty().trim() }
+            if (text.isEmpty()) {
+                showError(getString(R.string.ime_error_empty))
+            } else {
+                val usedKeys = llm.normalizeKeys(settings.apiKeys)
+                if (usedKeys.isNotEmpty()) {
+                    keyCursor = (keyCursor + 1) % usedKeys.size
+                }
+                deliverTranscript(text)
+            }
+        }
+    }
+
     private fun finishRecording(upload: Boolean) {
         if (state != State.RECORDING) return
+        // Live session owns its lifecycle; the one-shot path below is for
+        // non-live models only.
+        if (liveStreamingSession != null) {
+            finishLiveStreaming(upload)
+            return
+        }
         stopTimer()
         val rec = recorder
         recorder = null
@@ -590,6 +741,13 @@ class VoiceImeService : InputMethodService() {
         transcribeJob?.cancel()
         transcribeJob = null
         llm.cancel()
+        try {
+            liveStreamingSession?.close()
+        } catch (e: Exception) {
+            // Session already gone.
+        }
+        liveStreamingSession = null
+        liveFinalParts.setLength(0)
         recorder?.discard()
         recorder = null
         lastWav = null

@@ -135,16 +135,199 @@ class LlmClient {
     }
 
     /**
-     * Cancels the in-flight transcription request, if any. Covers both
-     * transports: the REST call and the Live socket. Failing the Live result
-     * first guarantees TranscribeException("cancelled") wins over any
-     * socket-teardown error that arrives a moment later.
+     * Cancels the in-flight transcription request, if any. Covers all
+     * transports: the REST call, the one-shot Live socket, and any open
+     * streaming LiveSession. Failing the Live result first guarantees
+     * TranscribeException("cancelled") wins over any socket-teardown error
+     * that arrives a moment later.
      */
     fun cancel() {
         inFlight?.cancel()
         liveResult?.completeExceptionally(TranscribeException("cancelled"))
         inFlightWs?.close(1001, "cancel")
         inFlightWs = null
+        liveSession?.close()
+    }
+
+    @Volatile
+    private var liveSession: LiveSession? = null
+
+    /**
+     * Opens a continuous Live transcription session (cookbook pattern):
+     * socket stays open while the user speaks; interim hypotheses stream
+     * back and [onInterim] replaces the preview text; [onFinal] fires per
+     * finalized turn; [onError] fires once on failure. Call [LiveSession.sendPcm]
+     * as mic buffers arrive, [LiveSession.finish] on Stop. Caller owns the
+     * session lifecycle and must call finish() (or close()) exactly once.
+     */
+    fun startLiveSession(
+        key: String,
+        baseUrl: String,
+        model: String,
+        smartMode: Boolean = false,
+        onInterim: (String) -> Unit,
+        onFinal: (String) -> Unit,
+        onError: (String) -> Unit,
+    ): LiveSession {
+        val session = LiveSession(http, baseUrl, model, key, smartMode, onInterim, onFinal, onError, ::debugLog)
+        liveSession = session
+        session.open()
+        return session
+    }
+
+    /**
+     * Continuous Live transcription session. One instance per mic tap on
+     * Live-marker models. Threading: OkHttp callbacks arrive on its threads;
+     * listener lambdas are invoked on the calling thread — the service posts
+     * to main. All sends are best-effort guarded; terminal callbacks fire
+     * at most once.
+     */
+    class LiveSession internal constructor(
+        private val http: OkHttpClient,
+        baseUrl: String,
+        private val model: String,
+        private val key: String,
+        private val smartMode: Boolean,
+        private val onInterim: (String) -> Unit,
+        private val onFinal: (String) -> Unit,
+        private val onError: (String) -> Unit,
+        private val log: (String, String) -> Unit,
+    ) {
+        private val wsUrl = liveUrl(baseUrl)
+        @Volatile private var ws: WebSocket? = null
+        @Volatile private var finished = false
+        @Volatile private var failed = false
+        private val finalParts = StringBuilder()
+
+        fun open() {
+            val listener = object : WebSocketListener() {
+                override fun onOpen(webSocket: WebSocket, response: Response) {
+                    try {
+                        webSocket.send(buildLiveSetupJson(model, smartMode))
+                        webSocket.send(buildLiveActivityStartJson())
+                    } catch (e: Exception) {
+                        failOnce("Network error — check connection")
+                    }
+                }
+
+                override fun onMessage(webSocket: WebSocket, text: String) {
+                    val fragments = parseLiveInputTranscripts(text)
+                    if (fragments.isNotEmpty()) {
+                        if (hasLiveFinalTranscript(text)) {
+                            for (fragment in fragments) finalParts.append(fragment)
+                            try {
+                                onFinal(finalParts.toString())
+                            } catch (e: Exception) {
+                                // Listener must never throw into OkHttp.
+                            }
+                        } else {
+                            // Interim repeats the full hypothesis: replace preview.
+                            val preview = fragments.joinToString("")
+                            try {
+                                onInterim(preview)
+                            } catch (e: Exception) {
+                                // Listener must never throw into OkHttp.
+                            }
+                        }
+                    }
+                    if (isLiveTurnComplete(text)) {
+                        finishOk()
+                    }
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    webSocket.close(1000, null)
+                }
+
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    finishOk()
+                }
+
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    val code = response?.code ?: -1
+                    when {
+                        code == 429 -> failOnce("Rate limited — retry")
+                        code == 401 || code == 403 -> {
+                            val body = try {
+                                response?.body?.string().orEmpty()
+                            } catch (e: Exception) {
+                                ""
+                            }
+                            failOnce(mapHttpError(code, body))
+                        }
+                        else -> failOnce("Network error — check connection")
+                    }
+                }
+            }
+            ws = http.newWebSocket(Request.Builder().url("$wsUrl?key=$key").build(), listener)
+            log("live-session", "open model=$model")
+        }
+
+        /** Streams one raw PCM chunk (any length; 3200B ≈ 100 ms nominal). */
+        fun sendPcm(pcmChunk: ByteArray) {
+            if (finished || failed) return
+            try {
+                val ok = ws?.send(buildLiveAudioMessage(pcmChunk)) ?: false
+                if (!ok) failOnce("Network error — check connection")
+            } catch (e: Exception) {
+                failOnce("Network error — check connection")
+            }
+        }
+
+        /**
+         * Ends the turn (Stop): activityEnd + stream end, then close. The
+         * server flushes the final transcript; onFinal fires on arrival and
+         * the socket closes via turnComplete/onClosed.
+         */
+        fun finish() {
+            if (finished || failed) return
+            finished = true
+            try {
+                ws?.send(buildLiveActivityEndJson())
+                ws?.send(buildLiveAudioEndJson())
+            } catch (e: Exception) {
+                // Send path dead; close will settle via onFailure/onClosed.
+            }
+        }
+
+        /** Abandons the session without a transcript (Cancel / hide / destroy). */
+        fun close() {
+            if (finished || failed) return
+            finished = true
+            try {
+                ws?.close(1001, "cancel")
+            } catch (e: Exception) {
+                // Already gone.
+            }
+            ws = null
+        }
+
+        private fun finishOk() {
+            if (finished || failed) return
+            finished = true
+            try {
+                ws?.close(1000, null)
+            } catch (e: Exception) {
+                // Already closed.
+            }
+            ws = null
+        }
+
+        private fun failOnce(message: String) {
+            if (finished || failed) return
+            failed = true
+            try {
+                ws?.close(1001, "error")
+            } catch (e: Exception) {
+                // Already gone.
+            }
+            ws = null
+            try {
+                onError(message)
+            } catch (e: Exception) {
+                // Listener must never throw into OkHttp.
+            }
+        }
     }
 
     /** Diagnostic log only: never pass apiKey or audio data here. */
