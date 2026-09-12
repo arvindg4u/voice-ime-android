@@ -22,7 +22,7 @@ internal const val LIVE_CHUNK_BYTES = 3200
 internal const val LIVE_PCM_MIME = "audio/pcm;rate=16000"
 
 internal const val LIVE_RPC_PATH =
-    "/ws/google.ai.generativelanguage.v1beta/GenerativeService.BidiGenerateContent"
+    "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
 internal const val LIVE_DEFAULT_HOST = "generativelanguage.googleapis.com"
 
 /** Matches the server's "this model is Live-only" 400 body. */

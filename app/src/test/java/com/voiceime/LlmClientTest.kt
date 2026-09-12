@@ -462,7 +462,7 @@ class LlmClientTest {
     fun `liveUrl defaults for google and wraps custom hosts`() {
         assertEquals(
             "wss://generativelanguage.googleapis.com" +
-                "/ws/google.ai.generativelanguage.v1beta/GenerativeService.BidiGenerateContent",
+                "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
             liveUrl("https://generativelanguage.googleapis.com/v1beta"),
         )
         val custom = liveUrl("https://proxy.example.com/v1beta")
