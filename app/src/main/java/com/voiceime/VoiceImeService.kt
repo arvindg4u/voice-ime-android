@@ -437,7 +437,7 @@ class VoiceImeService : InputMethodService() {
 
     private fun startLiveStreaming() {
         cancelWork()
-        val keys = llm.normalizeKeys(settings.apiKeys)
+        val keys = normalizeKeys(settings.apiKeys)
         if (keys.isEmpty()) {
             showError(getString(R.string.ime_error_no_key))
             return
@@ -554,7 +554,7 @@ class VoiceImeService : InputMethodService() {
             if (text.isEmpty()) {
                 showError(getString(R.string.ime_error_empty))
             } else {
-                val usedKeys = llm.normalizeKeys(settings.apiKeys)
+                val usedKeys = normalizeKeys(settings.apiKeys)
                 if (usedKeys.isNotEmpty()) {
                     keyCursor = (keyCursor + 1) % usedKeys.size
                 }
