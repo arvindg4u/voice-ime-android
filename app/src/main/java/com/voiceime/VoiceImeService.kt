@@ -359,11 +359,11 @@ class VoiceImeService : InputMethodService() {
     }
 
     private fun onEnterTapped() {
-        hapticTap()
         val info = lastEditorInfo
         val actionId = info?.imeOptions?.and(EditorInfo.IME_MASK_ACTION)
             ?: EditorInfo.IME_ACTION_UNSPECIFIED
         val ic = currentInputConnection ?: return
+        hapticTap()
         if (actionId == EditorInfo.IME_ACTION_UNSPECIFIED || actionId == EditorInfo.IME_ACTION_NONE) {
             try {
                 ic.beginBatchEdit()

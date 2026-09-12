@@ -80,7 +80,7 @@ class ImeLayoutPolicyTest {
         // Mid-second: remainder to the boundary.
         assertEquals(750L, ImeLayoutPolicy.nextTimerDelayMs(250L))
         assertEquals(1L, ImeLayoutPolicy.nextTimerDelayMs(1999L))
-        // Negative elapsed (clock moved): fire now.
+        // Negative elapsed (clock moved): clamped to a full interval.
         assertEquals(1000L, ImeLayoutPolicy.nextTimerDelayMs(-50L))
     }
 

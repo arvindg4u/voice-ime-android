@@ -67,7 +67,8 @@ object ImeLayoutPolicy {
      * Delay until the next whole-second boundary of the recording clock:
      * 1000 minus the millisecond part of [elapsedMs]. Keeps the timer
      * runnable posting once per displayed second instead of polling at a
-     * fixed rate. Negative elapsed (clock moved) means the boundary is now.
+     * fixed rate. Negative elapsed (clock moved) is clamped to zero, so it
+     * schedules a full 1000ms interval rather than firing immediately.
      */
     fun nextTimerDelayMs(elapsedMs: Long): Long = 1000L - (elapsedMs.coerceAtLeast(0L) % 1000L)
 
