@@ -435,6 +435,11 @@ class VoiceImeService : InputMethodService() {
     private var liveStreamingSession: LlmClient.LiveSession? = null
     private val liveFinalParts = StringBuilder()
     private var liveLastInterim = ""
+    /** Commit coroutine for the Stop flow; Cancel taps cancel this, not the socket. */
+    private var liveCommitJob: kotlinx.coroutines.Job? = null
+    /** Id of the session currently allowed to write live buffers. */
+    private var liveSessionId = 0L
+    private var liveSessionSeq = 0L""
 
     private fun startLiveStreaming() {
         cancelWork()
@@ -450,17 +455,23 @@ class VoiceImeService : InputMethodService() {
             model = model,
             smartMode = settings.smartMode,
             onInterim = { preview ->
+                val id = liveSessionSeq
                 mainHandler.post {
-                    if (state == State.RECORDING) {
+                    if (state == State.RECORDING && id == liveSessionId) {
                         liveLastInterim = preview
                         statusText?.text = preview
                     }
                 }
             },
             onFinal = { text ->
+                val id = liveSessionSeq
                 mainHandler.post {
-                    liveFinalParts.append(text)
-                    statusText?.text = liveFinalParts.toString()
+                    if (id == liveSessionId &&
+                        (state == State.RECORDING || state == State.UPLOADING)
+                    ) {
+                        liveFinalParts.append(text)
+                        statusText?.text = liveFinalParts.toString()
+                    }
                 }
             },
             onError = { message ->
@@ -468,6 +479,8 @@ class VoiceImeService : InputMethodService() {
             },
         )
         liveStreamingSession = session
+        liveSessionSeq += 1
+        liveSessionId = liveSessionSeq
         val rec = AudioRecorder(
             this@VoiceImeService,
             onLevel = { level ->
@@ -519,7 +532,8 @@ class VoiceImeService : InputMethodService() {
         state = State.UPLOADING
         renderState()
         statusText?.setText(R.string.ime_status_uploading)
-        serviceScope.launch {
+        liveCommitJob?.cancel()
+        liveCommitJob = serviceScope.launch {
             val peak = try {
                 withContext(Dispatchers.IO) { rec?.stop() }?.second ?: 0f
             } catch (e: Exception) {
@@ -536,7 +550,13 @@ class VoiceImeService : InputMethodService() {
                 renderState()
                 return@launch
             }
-            if (AudioRecorder.isSilent(peak)) {
+            // Hand the session to the commit flow: lifecycle must not kill it.
+            session?.detach()
+            // Read buffers BEFORE the silence gate: quiet gain with a valid
+            // server transcript still commits instead of crying no-speech.
+            val preText = liveFinalParts.toString().trim()
+                .ifEmpty { liveLastInterim.trim() }
+            if (AudioRecorder.isSilent(peak) && preText.isEmpty()) {
                 try {
                     session?.close()
                 } catch (e: Exception) {
@@ -551,13 +571,21 @@ class VoiceImeService : InputMethodService() {
             } catch (e: Exception) {
                 // Session already dead; fall through to whatever arrived.
             }
-            // Give the server a short window to flush the final turn; the
-            // interim preview already on screen is the fallback text.
-            kotlinx.coroutines.delay(4000)
+            // Signal-driven: commit the moment the server finalizes
+            // (turnComplete/first final/close-with-text); ~12 s fallback
+            // commits from whatever interim/final text already arrived.
+            val signaled = try {
+                session?.awaitFinal(12_000) ?: false
+            } catch (e: Exception) {
+                false
+            }
+            if (!signaled) {
+                android.util.Log.d("VoiceIme", "live-commit: no final signal in 12s, committing fallback")
+            }
             try {
                 session?.close()
             } catch (e: Exception) {
-                // Socket already settled via turnComplete/onClosed/grace.
+                // Socket already settled via turnComplete/onClosed.
             }
             val interim = liveLastInterim.trim()
             val text = liveFinalParts.toString().trim()
@@ -759,13 +787,21 @@ class VoiceImeService : InputMethodService() {
         stopTimer()
         transcribeJob?.cancel()
         transcribeJob = null
+        liveCommitJob?.cancel()
+        liveCommitJob = null
         llm.cancel()
-        try {
-            liveStreamingSession?.close()
-        } catch (e: Exception) {
-            // Session already gone.
-        }
+        // A detached session belongs to the commit flow: kill the job above,
+        // never the socket — the job's cancellation settles it. An attached
+        // (still recording) session dies here.
+        val attached = liveStreamingSession
         liveStreamingSession = null
+        if (attached != null && !attached.isDetached()) {
+            try {
+                attached.close()
+            } catch (e: Exception) {
+                // Session already gone.
+            }
+        }
         liveFinalParts.setLength(0)
         liveLastInterim = ""
         recorder?.discard()

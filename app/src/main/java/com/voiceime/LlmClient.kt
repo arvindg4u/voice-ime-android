@@ -146,7 +146,9 @@ class LlmClient {
         liveResult?.completeExceptionally(TranscribeException("cancelled"))
         inFlightWs?.close(1001, "cancel")
         inFlightWs = null
-        liveSession?.close()
+        // Never kill a session the commit flow owns; cancelWork() handles it.
+        val session = liveSession
+        if (session != null && !session.isDetached()) session.close()
     }
 
     @Volatile
@@ -200,6 +202,12 @@ class LlmClient {
         @Volatile private var finished = false
         @Volatile private var failed = false
         private val finalParts = StringBuilder()
+        /** Completes on first turnComplete or first final fragment. */
+        private val finalSignal = CompletableDeferred<Unit>()
+        /** Chars of finalParts already delivered via onFinal (delta base). */
+        private var deliveredFinalChars = 0
+        /** True once the owner handed the session to the commit flow. */
+        @Volatile private var detached = false
 
         fun open() {
             val listener = object : WebSocketListener() {
@@ -230,15 +238,20 @@ class LlmClient {
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    logShapeOnce(text)
                     val fragments = parseLiveInputTranscripts(text)
                     if (fragments.isNotEmpty()) {
                         if (hasLiveFinalTranscript(text)) {
                             for (fragment in fragments) finalParts.append(fragment)
+                            // Delta only: onFinal already sent the prefix.
+                            val delta = finalParts.substring(deliveredFinalChars)
+                            deliveredFinalChars = finalParts.length
                             try {
-                                onFinal(finalParts.toString())
+                                onFinal(delta)
                             } catch (e: Exception) {
                                 // Listener must never throw into OkHttp.
                             }
+                            finalSignal.complete(Unit)
                         } else {
                             // Interim repeats the full hypothesis: replace preview.
                             val preview = fragments.joinToString("")
@@ -250,6 +263,7 @@ class LlmClient {
                         }
                     }
                     if (isLiveTurnComplete(text)) {
+                        finalSignal.complete(Unit)
                         finishOk()
                     }
                 }
@@ -259,6 +273,7 @@ class LlmClient {
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    if (finalParts.isNotEmpty()) finalSignal.complete(Unit)
                     finishOk()
                 }
 
@@ -316,34 +331,46 @@ class LlmClient {
          * server never finalizes, close the socket ourselves after a grace
          * window so Stop never orphans an open connection.
          */
-        fun finish(graceMs: Long = FINISH_GRACE_MS) {
+        /**
+         * Sends the turn-end markers. Does NOT close: the owner awaits
+         * [awaitFinal] and closes after reading the commit snapshot.
+         * Markers go out before any state flip so a fast Stop that races
+         * teardown still delivers turn boundaries to the server.
+         */
+        fun finish() {
             if (finished || failed) return
-            finished = true
             try {
                 ws?.send(buildLiveActivityEndJson())
                 ws?.send(buildLiveAudioEndJson())
             } catch (e: Exception) {
                 // Send path dead; close will settle via onFailure/onClosed.
+            } finally {
+                finished = true
             }
-            if (graceMs <= 0) return
-            val sock = ws
-            Thread({
-                try {
-                    Thread.sleep(graceMs)
-                } catch (e: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    return@Thread
-                }
-                // Still waiting on the server: give up the socket. Any late
-                // final already fired via onFinal; the caller commits from
-                // its own copies, never from this socket.
-                try {
-                    sock?.close(1000, "finish-grace")
-                } catch (e: Exception) {
-                    // Already gone.
-                }
-            }, "VoiceImeLiveFinish").apply { isDaemon = true }.start()
         }
+
+        /**
+         * Suspends until the server finalizes (turnComplete, first final, or
+         * close-with-text) or [timeoutMs] elapses. Returns true when a signal
+         * arrived; false on timeout — the caller then commits from whatever
+         * interim/final text already arrived.
+         */
+        suspend fun awaitFinal(timeoutMs: Long): Boolean {
+            return try {
+                withTimeout(timeoutMs) { finalSignal.await() }
+                true
+            } catch (e: TimeoutCancellationException) {
+                false
+            }
+        }
+
+        /** Marks the session handed off to the commit flow (lifecycle must not kill it). */
+        fun detach() {
+            detached = true
+        }
+
+        /** True while the commit flow owns this session. */
+        fun isDetached(): Boolean = detached
 
         /**
          * Abandons the session without a transcript (Cancel / hide / destroy).
@@ -352,6 +379,7 @@ class LlmClient {
          */
         fun close() {
             finished = true
+            clearAlias()
             synchronized(pending) { pending.clear() }
             try {
                 ws?.close(1001, "cancel")
@@ -361,9 +389,41 @@ class LlmClient {
             ws = null
         }
 
+        /**
+         * One-shot shape discovery (D10): logs the top-level serverContent
+         * keys of the first few messages so a device run reveals which field
+         * actually carries the transcript. Never logs audio, keys, or text.
+         */
+        private var shapeLogged = 0
+
+        private fun logShapeOnce(serverJson: String) {
+            if (shapeLogged >= 3) return
+            shapeLogged++
+            val keys = try {
+                val sc = org.json.JSONObject(serverJson).optJSONObject("serverContent")
+                    ?: org.json.JSONObject(serverJson).optJSONObject("server_content")
+                    ?: return
+                val names = mutableListOf<String>()
+                val it = sc.keys()
+                while (it.hasNext()) {
+                    val k = it.next()
+                    names.add(if (k == "inputTranscription" || k == "input_transcription") "$k(len=${sc.optJSONObject(k)?.optString("text").orEmpty().length})" else k)
+                }
+                names.sorted().joinToString(",")
+            } catch (e: Exception) {
+                "unparseable"
+            }
+            log("live-shape", "msg#$shapeLogged serverContent=[$keys]")
+        }
+
+        private fun clearAlias() {
+            if (liveSession === this) liveSession = null
+        }
+
         private fun finishOk() {
             if (finished || failed) return
             finished = true
+            clearAlias()
             synchronized(pending) { pending.clear() }
             try {
                 ws?.close(1000, null)
@@ -376,6 +436,7 @@ class LlmClient {
         private fun failOnce(message: String) {
             if (finished || failed) return
             failed = true
+            clearAlias()
             synchronized(pending) { pending.clear() }
             try {
                 ws?.close(1001, "error")

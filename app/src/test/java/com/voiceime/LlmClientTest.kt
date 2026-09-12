@@ -659,6 +659,13 @@ class LlmClientTest {
             }
             assertEquals(listOf("hel"), interims.toList())
             assertEquals(listOf("hello"), finals.toList())
+            // Second turn delivers only its own delta, not the accumulation.
+            ws.send("{\"serverContent\":{\"inputTranscription\":{\"text\":\" world\"}}}}")
+            val twoDeadline = System.currentTimeMillis() + 10_000
+            while (finals.size < 2 && System.currentTimeMillis() < twoDeadline) {
+                Thread.sleep(20)
+            }
+            assertEquals(listOf("hello", " world"), finals.toList())
         } finally {
             try {
                 session.close()
@@ -706,6 +713,85 @@ class LlmClientTest {
             // Server stays silent: no transcripts, no turnComplete.
             session.finish(graceMs = 300)
             assertTrue(serverClosed.await(10, TimeUnit.SECONDS))
+        } finally {
+            try {
+                session.close()
+            } finally {
+                try {
+                    serverWs.get()?.close(1000, null)
+                } catch (e: Exception) {
+                    // Already gone.
+                }
+                server.shutdown()
+            }
+        }
+    }
+
+    @Test
+    fun `liveSession awaitFinal resolves on turnComplete`() {
+        val server = MockWebServer()
+        val serverWs = AtomicReference<WebSocket>()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                serverWs.set(webSocket)
+            }
+        }))
+        server.start()
+        val session = client.startLiveSession(
+            "k", server.url("/v1beta").toString(), "m",
+            onInterim = {}, onFinal = {}, onError = {},
+        )
+        try {
+            val openDeadline = System.currentTimeMillis() + 10_000
+            while (serverWs.get() == null && System.currentTimeMillis() < openDeadline) {
+                Thread.sleep(20)
+            }
+            val ws = serverWs.get() ?: throw AssertionError("no server socket")
+            ws.send("{\"serverContent\":{\"inputTranscription\":{\"text\":\"hi\"}}}}")
+            ws.send("{\"serverContent\":{\"turnComplete\":true}}")
+            val signaled = kotlinx.coroutines.runBlocking {
+                session.awaitFinal(10_000)
+            }
+            assertTrue(signaled)
+        } finally {
+            try {
+                session.close()
+            } finally {
+                try {
+                    serverWs.get()?.close(1000, null)
+                } catch (e: Exception) {
+                    // Already gone.
+                }
+                server.shutdown()
+            }
+        }
+    }
+
+    @Test
+    fun `liveSession awaitFinal times out without signal`() {
+        val server = MockWebServer()
+        val serverWs = AtomicReference<WebSocket>()
+        server.enqueue(MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                serverWs.set(webSocket)
+            }
+        }))
+        server.start()
+        val session = client.startLiveSession(
+            "k", server.url("/v1beta").toString(), "m",
+            onInterim = {}, onFinal = {}, onError = {},
+        )
+        try {
+            val openDeadline = System.currentTimeMillis() + 10_000
+            while (serverWs.get() == null && System.currentTimeMillis() < openDeadline) {
+                Thread.sleep(20)
+            }
+            assertTrue(serverWs.get() != null)
+            // Server stays silent: awaitFinal must return false, not hang.
+            val signaled = kotlinx.coroutines.runBlocking {
+                session.awaitFinal(300)
+            }
+            assertFalse(signaled)
         } finally {
             try {
                 session.close()
