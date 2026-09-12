@@ -272,6 +272,7 @@ class LlmClient {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 try {
                     webSocket.send(buildLiveSetupJson(model, smartMode))
+                    webSocket.send(buildLiveActivityStartJson())
                     var offset = 0
                     while (offset < pcm.size) {
                         val end = minOf(offset + LIVE_CHUNK_BYTES, pcm.size)
@@ -282,6 +283,7 @@ class LlmClient {
                         }
                         offset = end
                     }
+                    webSocket.send(buildLiveActivityEndJson())
                     webSocket.send(buildLiveAudioEndJson())
                 } catch (e: Exception) {
                     deferred.complete(LiveOutcome.Fail("Network error — check connection", e))

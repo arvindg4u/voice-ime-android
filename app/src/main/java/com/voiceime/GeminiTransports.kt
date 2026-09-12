@@ -84,10 +84,13 @@ internal fun isDevInstructionError(httpCode: Int, body: String): Boolean {
 }
 
 /**
- * Live session setup message: model plus transcription config. Response
- * modality TEXT keeps it transcription-only (no billed audio output);
- * inputAudioTranscription mode SMART/VERBATIM comes from docs. Never
- * carries keys or audio.
+ * Live session setup message for TRANSCRIPTION (official live-transcribe
+ * docs): TEXT response modality (AUDIO is for conversational agents),
+ * inputAudioTranscription with auto language detection and SMART/VERBATIM
+ * mode inside it. Manual VAD (push-to-talk): automatic activity detection
+ * is DISABLED because our mic tap / Stop button already marks turn
+ * boundaries — with auto-VAD the server keeps waiting for silence and the
+ * turn never finalizes. Never carries keys or audio.
  */
 internal fun buildLiveSetupJson(model: String, smartMode: Boolean = false): String =
     JSONObject()
@@ -100,12 +103,31 @@ internal fun buildLiveSetupJson(model: String, smartMode: Boolean = false): Stri
                     JSONObject().put("responseModalities", JSONArray().put("TEXT")),
                 )
                 .put(
+                    "realtimeInputConfig",
+                    JSONObject().put(
+                        "automaticActivityDetection",
+                        JSONObject().put("disabled", true),
+                    ),
+                )
+                .put(
                     "inputAudioTranscription",
                     JSONObject()
                         .put("languageCodes", JSONArray())
                         .put("mode", if (smartMode) "SMART" else "VERBATIM"),
                 ),
         )
+        .toString()
+
+/** Live turn-start marker (manual VAD): sent before the first PCM chunk. */
+internal fun buildLiveActivityStartJson(): String =
+    JSONObject()
+        .put("realtimeInput", JSONObject().put("activityStart", JSONObject()))
+        .toString()
+
+/** Live turn-end marker (manual VAD): sent after the last PCM chunk. */
+internal fun buildLiveActivityEndJson(): String =
+    JSONObject()
+        .put("realtimeInput", JSONObject().put("activityEnd", JSONObject()))
         .toString()
 
 /** Live audio chunk message: base64 PCM with its 16 kHz mono mime type. */

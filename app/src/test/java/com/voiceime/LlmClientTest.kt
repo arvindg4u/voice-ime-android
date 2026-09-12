@@ -326,6 +326,24 @@ class LlmClientTest {
     }
 
     @Test
+    fun `buildLiveSetupJson disables automatic activity detection`() {
+        // Push-to-talk: our mic tap / Stop marks turn boundaries (manual VAD).
+        val setup = JSONObject(buildLiveSetupJson("gemini-3.5-transcribe-live")).getJSONObject("setup")
+        assertTrue(
+            setup.getJSONObject("realtimeInputConfig")
+                .getJSONObject("automaticActivityDetection").getBoolean("disabled"),
+        )
+    }
+
+    @Test
+    fun `buildLiveActivity markers carry start and end signals`() {
+        val start = JSONObject(buildLiveActivityStartJson()).getJSONObject("realtimeInput")
+        assertTrue(start.has("activityStart"))
+        val end = JSONObject(buildLiveActivityEndJson()).getJSONObject("realtimeInput")
+        assertTrue(end.has("activityEnd"))
+    }
+
+    @Test
     fun `isInteractionsModel matches only the dedicated model`() {
         assertTrue(isInteractionsModel("gemini-3.5-transcribe"))
         assertTrue(isInteractionsModel("  GEMINI-3.5-TRANSCRIBE  "))
