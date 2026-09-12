@@ -239,6 +239,13 @@ class LlmClient {
                     try {
                         if (finished || failed) return
                         log("live-wire", "handshake code=" + response.code)
+                        // Deflate forensics: if the server accepted
+                        // permessage-deflate, our frames go out compressed
+                        // and its replies come back compressed.
+                        log(
+                            "live-wire",
+                            "ws-ext=" + response.header("Sec-WebSocket-Extensions", "none"),
+                        )
                         // Setup first; audio only after the server's
                         // setupComplete (early realtimeInput is dropped).
                         val setupJson = buildLiveSetupJson(model, smartMode)
