@@ -439,7 +439,7 @@ class VoiceImeService : InputMethodService() {
     private var liveCommitJob: kotlinx.coroutines.Job? = null
     /** Id of the session currently allowed to write live buffers. */
     private var liveSessionId = 0L
-    private var liveSessionSeq = 0L""
+    private var liveSessionSeq = 0L
 
     private fun startLiveStreaming() {
         cancelWork()

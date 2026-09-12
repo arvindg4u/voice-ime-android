@@ -162,6 +162,11 @@ class LlmClient {
      * as mic buffers arrive, [LiveSession.finish] on Stop. Caller owns the
      * session lifecycle and must call finish() (or close()) exactly once.
      */
+    /** Clears the stale session alias when the given session terminates. */
+    private fun clearLiveSession(session: LiveSession) {
+        if (liveSession === session) liveSession = null
+    }
+
     fun startLiveSession(
         key: String,
         baseUrl: String,
@@ -417,7 +422,7 @@ class LlmClient {
         }
 
         private fun clearAlias() {
-            if (liveSession === this) liveSession = null
+            clearLiveSession(this)
         }
 
         private fun finishOk() {
