@@ -436,6 +436,22 @@ class LlmClientTest {
     }
 
     @Test
+    fun `hasLiveFinalTranscript distinguishes final from interim`() {
+        assertTrue(hasLiveFinalTranscript("""{"serverContent":{"inputTranscription":{"text":"hi"}}}"""))
+        assertFalse(hasLiveFinalTranscript("""{"serverContent":{"interimInputTranscription":{"text":"hi"}}}"""))
+        assertFalse(hasLiveFinalTranscript("""{"serverContent":{}}"""))
+        assertFalse(hasLiveFinalTranscript("not json"))
+    }
+
+    @Test
+    fun `parseLiveInputTranscripts falls back to interim hypothesis`() {
+        val interim = """{"serverContent":{"interimInputTranscription":{"text":"partial"}}}"""
+        assertEquals(listOf("partial"), parseLiveInputTranscripts(interim))
+        val both = """{"serverContent":{"inputTranscription":{"text":"final"},"interimInputTranscription":{"text":"partial"}}}"""
+        assertEquals(listOf("final"), parseLiveInputTranscripts(both))
+    }
+
+    @Test
     fun `parseLiveInputTranscripts tolerates snake_case and junk`() {
         val snake = """{"server_content":{"inputTranscription":{"text":"hi"}}}"""
         assertEquals(listOf("hi"), parseLiveInputTranscripts(snake))

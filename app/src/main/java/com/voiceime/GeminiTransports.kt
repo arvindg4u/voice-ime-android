@@ -132,9 +132,10 @@ internal fun buildLiveAudioEndJson(): String =
         .toString()
 
 /**
- * Reads input-transcription text fragments from one Live server message.
- * Tolerates snake_case variants; empty or invalid JSON yields an empty
- * list and never throws.
+ * Reads transcription text fragments from one Live server message: FINAL
+ * input-transcription first, else interim hypotheses (docs: interim feeds
+ * live preview; final is authoritative). Tolerates snake_case variants;
+ * empty or invalid JSON yields an empty list and never throws.
  */
 internal fun parseLiveInputTranscripts(serverJson: String): List<String> {
     val root = try {
@@ -147,10 +148,34 @@ internal fun parseLiveInputTranscripts(serverJson: String): List<String> {
         ?: return emptyList()
     val transcription = serverContent.optJSONObject("inputTranscription")
         ?: serverContent.optJSONObject("input_transcription")
-        ?: return emptyList()
-    val text = transcription.optString("text").orEmpty()
+    val interim = serverContent.optJSONObject("interimInputTranscription")
+        ?: serverContent.optJSONObject("interim_input_transcription")
+    // Final wins when present; otherwise take the interim hypothesis so a
+    // turn that never finalizes (short clips, VAD wait) still yields text.
+    val text = transcription?.optString("text").orEmpty()
+        .ifEmpty { interim?.optString("text").orEmpty() }
     if (text.isEmpty()) return emptyList()
     return listOf(text)
+}
+
+/**
+ * True when a Live server message carries a FINAL input transcription
+ * (authoritative). Interim-only messages must REPLACE, not append, the
+ * running hypothesis — every interim repeats the full text so far.
+ */
+internal fun hasLiveFinalTranscript(serverJson: String): Boolean {
+    val root = try {
+        JSONObject(serverJson)
+    } catch (e: Exception) {
+        return false
+    }
+    val serverContent = root.optJSONObject("serverContent")
+        ?: root.optJSONObject("server_content")
+        ?: return false
+    val transcription = serverContent.optJSONObject("inputTranscription")
+        ?: serverContent.optJSONObject("input_transcription")
+        ?: return false
+    return transcription.optString("text").orEmpty().isNotEmpty()
 }
 
 /**

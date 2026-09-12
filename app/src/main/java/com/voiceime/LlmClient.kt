@@ -289,7 +289,18 @@ class LlmClient {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                for (fragment in parseLiveInputTranscripts(text)) transcript.append(fragment)
+                val fragments = parseLiveInputTranscripts(text)
+                if (fragments.isNotEmpty()) {
+                    if (hasLiveFinalTranscript(text)) {
+                        // Final turn text: append (multiple turns accumulate).
+                        for (fragment in fragments) transcript.append(fragment)
+                    } else {
+                        // Interim hypothesis repeats the full text so far:
+                        // replace, never append, or one sentence becomes three.
+                        transcript.setLength(0)
+                        for (fragment in fragments) transcript.append(fragment)
+                    }
+                }
                 if (isLiveTurnComplete(text)) {
                     webSocket.close(1000, null)
                     completeDone()
