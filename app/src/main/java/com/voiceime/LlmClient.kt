@@ -162,11 +162,6 @@ class LlmClient {
      * as mic buffers arrive, [LiveSession.finish] on Stop. Caller owns the
      * session lifecycle and must call finish() (or close()) exactly once.
      */
-    /** Clears the stale session alias when the given session terminates. */
-    private fun clearLiveSession(session: LiveSession) {
-        if (liveSession === session) liveSession = null
-    }
-
     fun startLiveSession(
         key: String,
         baseUrl: String,
@@ -176,6 +171,9 @@ class LlmClient {
         onFinal: (String) -> Unit,
         onError: (String) -> Unit,
     ): LiveSession {
+        // Drop any stale alias: the previous session already terminated
+        // (its terminal path closed the socket); only the new one is live.
+        liveSession?.close()
         val session = LiveSession(http, baseUrl, model, key, smartMode, onInterim, onFinal, onError, ::debugLog)
         liveSession = session
         session.open()
@@ -384,7 +382,6 @@ class LlmClient {
          */
         fun close() {
             finished = true
-            clearAlias()
             synchronized(pending) { pending.clear() }
             try {
                 ws?.close(1001, "cancel")
@@ -421,14 +418,9 @@ class LlmClient {
             log("live-shape", "msg#$shapeLogged serverContent=[$keys]")
         }
 
-        private fun clearAlias() {
-            clearLiveSession(this)
-        }
-
         private fun finishOk() {
             if (finished || failed) return
             finished = true
-            clearAlias()
             synchronized(pending) { pending.clear() }
             try {
                 ws?.close(1000, null)
@@ -441,7 +433,6 @@ class LlmClient {
         private fun failOnce(message: String) {
             if (finished || failed) return
             failed = true
-            clearAlias()
             synchronized(pending) { pending.clear() }
             try {
                 ws?.close(1001, "error")
