@@ -463,9 +463,8 @@ class VoiceImeService : InputMethodService() {
     private var liveLastInterim = ""
     /** Commit coroutine for the Stop flow; Cancel taps cancel this, not the socket. */
     private var liveCommitJob: kotlinx.coroutines.Job? = null
-    /** Id of the session currently allowed to write live buffers. */
-    private var liveSessionId = 0L
-    private var liveSessionSeq = 0L
+    /** Guard for the session currently allowed to write live buffers. */
+    private val liveGuard = LiveSessionGuard()
 
     private fun startLiveStreaming() {
         cancelWork()
@@ -475,24 +474,26 @@ class VoiceImeService : InputMethodService() {
             return
         }
         val model = settings.model
+        // Capture the session id at start: reading the guard at fire time
+        // would see the converged value and accept every session's
+        // callbacks, including a previous session's late ones.
+        val sessionId = liveGuard.next()
         val session = llm.startLiveSession(
             key = keys[keyCursor % keys.size],
             baseUrl = settings.baseUrl,
             model = model,
             smartMode = settings.smartMode,
             onInterim = { preview ->
-                val id = liveSessionSeq
                 mainHandler.post {
-                    if (state == State.RECORDING && id == liveSessionId) {
+                    if (state == State.RECORDING && liveGuard.isCurrent(sessionId)) {
                         liveLastInterim = preview
                         statusText?.text = preview
                     }
                 }
             },
             onFinal = { text ->
-                val id = liveSessionSeq
                 mainHandler.post {
-                    if (id == liveSessionId &&
+                    if (liveGuard.isCurrent(sessionId) &&
                         (state == State.RECORDING || state == State.UPLOADING)
                     ) {
                         liveFinalParts.append(text)
@@ -505,8 +506,6 @@ class VoiceImeService : InputMethodService() {
             },
         )
         liveStreamingSession = session
-        liveSessionSeq += 1
-        liveSessionId = liveSessionSeq
         val rec = AudioRecorder(
             this@VoiceImeService,
             onLevel = { level ->

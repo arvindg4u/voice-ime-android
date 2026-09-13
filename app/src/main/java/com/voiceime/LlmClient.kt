@@ -202,11 +202,9 @@ class LlmClient {
         private val pending = ArrayDeque<ByteArray>()
         @Volatile private var finished = false
         @Volatile private var failed = false
-        private val finalParts = StringBuilder()
+        private val finals = FinalAccumulator()
         /** Completes on first turnComplete or first final fragment. */
         private val finalSignal = CompletableDeferred<Unit>()
-        /** Chars of finalParts already delivered via onFinal (delta base). */
-        private var deliveredFinalChars = 0
         /** True once the owner handed the session to the commit flow. */
         @Volatile private var detached = false
 
@@ -292,14 +290,15 @@ class LlmClient {
             val fragments = parseLiveInputTranscripts(text)
             if (fragments.isNotEmpty()) {
                 if (hasLiveFinalTranscript(text)) {
-                    for (fragment in fragments) finalParts.append(fragment)
-                    // Delta only: onFinal already sent the prefix.
-                    val delta = finalParts.substring(deliveredFinalChars)
-                    deliveredFinalChars = finalParts.length
-                    try {
-                        onFinal(delta)
-                    } catch (e: Exception) {
-                        // Listener must never throw into the socket reader.
+                    // Overlap-aware: a cumulative server resend collapses
+                    // instead of duplicating; empty deltas never fire.
+                    val delta = finals.append(fragments.joinToString(""))
+                    if (delta.isNotEmpty()) {
+                        try {
+                            onFinal(delta)
+                        } catch (e: Exception) {
+                            // Listener must never throw into the socket reader.
+                        }
                     }
                     finalSignal.complete(Unit)
                 } else {
