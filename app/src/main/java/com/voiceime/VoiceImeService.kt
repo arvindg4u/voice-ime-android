@@ -88,6 +88,7 @@ class VoiceImeService : InputMethodService() {
     private var micButton: View? = null
     private var transportIcon: android.widget.ImageView? = null
     private var transportLabel: TextView? = null
+    private var backButton: View? = null
     private var statusText: TextView? = null
     /** True when the input view is the programmatic minimal fallback (inflate failed). */
     private var fallbackMode = false
@@ -184,6 +185,8 @@ class VoiceImeService : InputMethodService() {
         actionsRow = view.findViewById(R.id.imeActionsRow)
         clipBadge = view.findViewById(R.id.imeClipBadge)
         clipBadge?.setOnClickListener { showClipPopup() }
+        backButton = view.findViewById(R.id.imeBack)
+        backButton?.setOnClickListener { onBackTapped() }
 
         micButton?.setOnClickListener { onMicTapped() }
         cancelButton?.setOnClickListener { onCancelTapped() }
@@ -239,6 +242,7 @@ class VoiceImeService : InputMethodService() {
         enterButton = null
         actionsRow = null
         clipBadge = null
+        backButton = null
         rootView = layout
         renderState()
         return layout
@@ -362,6 +366,34 @@ class VoiceImeService : InputMethodService() {
             return
         }
         ic.performEditorAction(actionId)
+    }
+
+    /**
+     * Back to the previously used keyboard (Google voice-typing style).
+     * switchToPreviousInputMethod() restores the last IME when the system
+     * tracks one; otherwise fall back to the system picker. Recording is
+     * left running — the user returns via the system switcher.
+     */
+    private fun onBackTapped() {
+        hapticTap()
+        val switched = try {
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                switchToPreviousInputMethod()
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            false
+        }
+        if (!switched) {
+            try {
+                (getSystemService(INPUT_METHOD_SERVICE)
+                    as? android.view.inputmethod.InputMethodManager)
+                    ?.showInputMethodPicker()
+            } catch (e: Exception) {
+                // No switcher available; stay put.
+            }
+        }
     }
 
     private fun onCancelTapped() {

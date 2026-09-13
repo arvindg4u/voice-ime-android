@@ -5,6 +5,7 @@
     <!-- IME view -->
     <string name="ime_mic_description">Start recording</string>
     <string name="ime_mic_stop_description">Stop recording</string>
+    <string name="ime_back_description">Back to previous keyboard</string>
     <string name="ime_transport_idle">Tap to speak</string>
     <string name="ime_transport_stop">Tap to stop</string>
     <string name="ime_transport_uploading">Sending…</string>
