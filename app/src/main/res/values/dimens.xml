@@ -3,15 +3,16 @@
      values-sw600dp/dimens.xml; layouts reference these names, never raw dp. -->
 <resources>
     <!-- IME voice view -->
-    <dimen name="voice_wave_height">48dp</dimen>
+    <dimen name="voice_wave_height">40dp</dimen>
     <dimen name="voice_mic_size">56dp</dimen>
     <dimen name="voice_strip_min_height">40dp</dimen>
     <dimen name="voice_button_min_height">48dp</dimen>
-    <dimen name="voice_horizontal_padding">8dp</dimen>
+    <dimen name="voice_horizontal_padding">12dp</dimen>
+    <dimen name="voice_row_spacing">4dp</dimen>
+    <dimen name="voice_status_text_size">13sp</dimen>
+    <dimen name="voice_wave_bar_max_width">6dp</dimen>
     <dimen name="voice_vertical_padding">8dp</dimen>
     <dimen name="voice_content_max_width">560dp</dimen>
-    <dimen name="voice_wave_bar_max_width">8dp</dimen>
-    <dimen name="voice_status_text_size">14sp</dimen>
     <dimen name="voice_timer_text_size">12sp</dimen>
     <dimen name="voice_action_text_size">13sp</dimen>
     <dimen name="voice_hint_text_size">11sp</dimen>

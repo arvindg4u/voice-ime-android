@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- IME dynamic-color tokens: static fallbacks for API < 31. On API 31+
+     values-v31/ime_colors.xml overrides these with wallpaper-driven
+     @android:color/system_* refs (crash-free under the system
+     input-method theme — no ?attr/, no M3). -->
+<resources>
+    <color name="ime_surface">#FF1F1F1F</color>
+    <color name="ime_text_primary">#FFF2F2F2</color>
+    <color name="ime_text_secondary">#FFC7C7C7</color>
+    <color name="ime_accent">#FF6750A4</color>
+    <color name="ime_mic_disabled">#FF3C3C3C</color>
+    <color name="ime_accent_bright">#FFD0BCFF</color>
+    <color name="ime_accent_secondary">#FFCCC2DC</color>
+    <color name="ime_dot_idle">#FF808080</color>
+    <color name="ime_dot_recording">#FFD0BCFF</color>
+    <color name="ime_dot_uploading">#FFCCC2DC</color>
+    <color name="ime_dot_error">#FFFFB4AB</color>
+    <color name="ime_wave_bar">#FFD0BCFF</color>
+</resources>

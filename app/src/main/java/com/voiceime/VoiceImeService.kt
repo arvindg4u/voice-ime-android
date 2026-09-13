@@ -170,21 +170,14 @@ class VoiceImeService : InputMethodService() {
         timerText = view.findViewById(R.id.imeTimer)
         waveView = view.findViewById(R.id.imeWave)
         statusDot = view.findViewById(R.id.imeStatusDot)
-        val attrs = intArrayOf(
-            com.google.android.material.R.attr.colorOutlineVariant,
-            com.google.android.material.R.attr.colorPrimary,
-            com.google.android.material.R.attr.colorTertiary,
-            com.google.android.material.R.attr.colorError,
-        )
-        val ta = obtainStyledAttributes(attrs)
-        try {
-            dotIdle = ColorStateList.valueOf(ta.getColor(0, 0xFF808080.toInt()))
-            dotRecording = ColorStateList.valueOf(ta.getColor(1, 0xFF808080.toInt()))
-            dotUploading = ColorStateList.valueOf(ta.getColor(2, 0xFF808080.toInt()))
-            dotError = ColorStateList.valueOf(ta.getColor(3, 0xFF808080.toInt()))
-        } finally {
-            ta.recycle()
-        }
+        // Dynamic-color dot tints via @color/ime_* tokens (values-v31 maps
+        // them to wallpaper-driven system colors). No ?attr/ lookups here:
+        // the IME runs under the system input-method theme where M3 attrs
+        // don't resolve.
+        dotIdle = ColorStateList.valueOf(getColor(R.color.ime_dot_idle))
+        dotRecording = ColorStateList.valueOf(getColor(R.color.ime_dot_recording))
+        dotUploading = ColorStateList.valueOf(getColor(R.color.ime_dot_uploading))
+        dotError = ColorStateList.valueOf(getColor(R.color.ime_dot_error))
         stopButton = view.findViewById(R.id.imeStop)
         cancelButton = view.findViewById(R.id.imeCancel)
         retryButton = view.findViewById(R.id.imeRetry)
@@ -792,6 +785,9 @@ class VoiceImeService : InputMethodService() {
         renderState()
         refreshClipStrip()
         statusText?.setText(R.string.ime_status_idle)
+        statusText?.announceForAccessibility(
+            getString(R.string.ime_announced_committed, text.take(120)),
+        )
         hapticConfirm()
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
             Toast.makeText(this, R.string.ime_copied_paste, Toast.LENGTH_SHORT).show()
@@ -806,6 +802,7 @@ class VoiceImeService : InputMethodService() {
         state = State.ERROR
         renderState()
         statusText?.text = message
+        statusText?.announceForAccessibility(message)
         if (entering) hapticTap()
     }
 
@@ -867,7 +864,18 @@ class VoiceImeService : InputMethodService() {
         val uploading = state == State.UPLOADING
         val error = state == State.ERROR
         micButton?.isEnabled = !uploading
+        // TalkBack: the mic disc doubles as stop while recording.
+        val micDesc = if (recording) {
+            getString(R.string.ime_mic_stop_description)
+        } else {
+            getString(R.string.ime_mic_description)
+        }
+        if (micButton?.contentDescription?.toString() != micDesc) {
+            micButton?.contentDescription = micDesc
+        }
         setVisible(stopButton, recording)
+        // Timer lives next to Stop: visible only while it ticks.
+        setVisible(timerText, recording)
         // Collapse the actions row unless a child is actually visible:
         // Cancel shows mid-record/upload while Retry/Settings show on error,
         // so the row follows child visibility — never state directly — or a

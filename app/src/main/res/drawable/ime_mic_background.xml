@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Round mic disc: accent while enabled, neutral while disabled
+     (mic is disabled mid-upload). Framework selector — safe under the
+     system input-method theme. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false">
+        <shape android:shape="oval">
+            <solid android:color="@color/ime_mic_disabled" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="oval">
+            <solid android:color="@color/ime_accent" />
+        </shape>
+    </item>
+</selector>

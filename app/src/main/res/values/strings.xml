@@ -4,6 +4,8 @@
 
     <!-- IME view -->
     <string name="ime_mic_description">Start recording</string>
+    <string name="ime_mic_stop_description">Stop recording</string>
+    <string name="ime_announced_committed">Dictated: %1$s</string>
     <string name="ime_status_idle">Tap the mic and speak</string>
     <string name="ime_status_recording">Recording… tap Stop when done</string>
     <string name="ime_status_uploading">Transcribing…</string>
