@@ -1,37 +1,53 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Single clipboard history row: framework widgets only. -->
+<!-- Single clipboard history row: text + trailing pin/delete icon
+     buttons (48dp row, 40dp visuals). App theme — M3 attrs fine. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:gravity="center_vertical"
     android:minHeight="48dp"
     android:orientation="horizontal"
-    android:paddingBottom="4dp"
-    android:paddingTop="4dp">
+    android:background="?attr/selectableItemBackground"
+    android:paddingStart="16dp"
+    android:paddingEnd="4dp"
+    android:paddingTop="4dp"
+    android:paddingBottom="4dp">
 
-    <TextView
-        android:id="@+id/clipText"
+    <LinearLayout
         android:layout_width="0dp"
         android:layout_height="wrap_content"
         android:layout_weight="1"
-        android:ellipsize="end"
-        android:maxLines="2"
-        android:textSize="14sp" />
+        android:orientation="vertical">
 
-    <Button
+        <TextView
+            android:id="@+id/clipText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="2"
+            android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+        <TextView
+            android:id="@+id/clipState"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:textColor="?attr/colorOnSurfaceVariant" />
+    </LinearLayout>
+
+    <ImageButton
         android:id="@+id/clipPin"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:minHeight="40dp"
-        android:text="@string/clipboard_pin"
-        android:textSize="12sp" />
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/clipboard_pin"
+        android:src="@drawable/ic_pin" />
 
-    <Button
+    <ImageButton
         android:id="@+id/clipDelete"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="4dp"
-        android:minHeight="40dp"
-        android:text="@string/clipboard_delete"
-        android:textSize="12sp" />
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/clipboard_delete"
+        android:src="@drawable/ic_delete" />
 </LinearLayout>
