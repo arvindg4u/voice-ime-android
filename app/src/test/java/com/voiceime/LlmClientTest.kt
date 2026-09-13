@@ -592,4 +592,43 @@ class LlmClientTest {
         assertFalse(isLiveSetupComplete("not json"))
         assertFalse(isLiveSetupComplete(""))
     }
+
+    @Test
+    fun `final accumulator appends disjoint fragments`() {
+        val acc = FinalAccumulator()
+        assertEquals("hello ", acc.append("hello "))
+        assertEquals("world", acc.append("world"))
+        assertEquals("hello world", acc.snapshot())
+    }
+
+    @Test
+    fun `final accumulator collapses cumulative resend`() {
+        val acc = FinalAccumulator()
+        assertEquals("hello ", acc.append("hello "))
+        assertEquals("world", acc.append("hello world"))
+        assertEquals("hello world", acc.snapshot())
+    }
+
+    @Test
+    fun `final accumulator echoes yield empty delta`() {
+        val acc = FinalAccumulator()
+        assertEquals("hello", acc.append("hello"))
+        assertEquals("", acc.append("hello"))
+        assertEquals("hello", acc.snapshot())
+    }
+
+    @Test
+    fun `final accumulator empty incoming yields empty delta`() {
+        val acc = FinalAccumulator()
+        assertEquals("", acc.append(""))
+        assertEquals("", acc.snapshot())
+    }
+
+    @Test
+    fun `final accumulator appends only the new tail on partial overlap`() {
+        val acc = FinalAccumulator()
+        assertEquals("hello world", acc.append("hello world"))
+        assertEquals(" again", acc.append("world again"))
+        assertEquals("hello world again", acc.snapshot())
+    }
 }
