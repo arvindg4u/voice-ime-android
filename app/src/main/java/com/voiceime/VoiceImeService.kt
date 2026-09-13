@@ -84,8 +84,10 @@ class VoiceImeService : InputMethodService() {
     }
 
     private var rootView: View? = null
-    /** Mic control: FAB (ImageButton) in the normal view, plain Button in fallback. */
+    /** Transport pill (start/stop) in the normal view, plain Button in fallback. */
     private var micButton: View? = null
+    private var transportIcon: android.widget.ImageView? = null
+    private var transportLabel: TextView? = null
     private var statusText: TextView? = null
     /** True when the input view is the programmatic minimal fallback (inflate failed). */
     private var fallbackMode = false
@@ -96,15 +98,14 @@ class VoiceImeService : InputMethodService() {
     private var dotRecording: ColorStateList? = null
     private var dotUploading: ColorStateList? = null
     private var dotError: ColorStateList? = null
-    private var stopButton: Button? = null
-    private var cancelButton: Button? = null
+    private var cancelButton: View? = null
     private var retryButton: Button? = null
     private var settingsButton: Button? = null
     private var enterButton: Button? = null
     private var lastEditorInfo: EditorInfo? = null
     private var clipboardStore: ClipboardStore? = null
-    /** Compact history chip: count badge opening the full popup. */
-    private var clipChip: Button? = null
+    /** History badge in the transport row: count, opens the popup. */
+    private var clipBadge: Button? = null
     private var clipEntries: List<ClipboardEntry> = emptyList()
     private var clipListener: ClipboardManager.OnPrimaryClipChangedListener? = null
     private var lastClipFingerprint: Int = 0
@@ -161,7 +162,9 @@ class VoiceImeService : InputMethodService() {
 
     private fun inflateInputView(): View {
         val view = layoutInflater.inflate(R.layout.ime_voice_view, null)
-        micButton = view.findViewById(R.id.imeMic)
+        micButton = view.findViewById(R.id.imeTransport)
+        transportIcon = view.findViewById(R.id.imeTransportIcon)
+        transportLabel = view.findViewById(R.id.imeTransportLabel)
         statusText = view.findViewById(R.id.imeStatus)
         timerText = view.findViewById(R.id.imeTimer)
         waveView = view.findViewById(R.id.imeWave)
@@ -174,20 +177,15 @@ class VoiceImeService : InputMethodService() {
         dotRecording = ColorStateList.valueOf(getColor(R.color.ime_dot_recording))
         dotUploading = ColorStateList.valueOf(getColor(R.color.ime_dot_uploading))
         dotError = ColorStateList.valueOf(getColor(R.color.ime_dot_error))
-        stopButton = view.findViewById(R.id.imeStop)
         cancelButton = view.findViewById(R.id.imeCancel)
         retryButton = view.findViewById(R.id.imeRetry)
         settingsButton = view.findViewById(R.id.imeSettings)
         enterButton = view.findViewById(R.id.imeEnter)
         actionsRow = view.findViewById(R.id.imeActionsRow)
-        clipChip = view.findViewById(R.id.imeClipChip)
-        clipChip?.setOnClickListener { showClipPopup() }
+        clipBadge = view.findViewById(R.id.imeClipBadge)
+        clipBadge?.setOnClickListener { showClipPopup() }
 
         micButton?.setOnClickListener { onMicTapped() }
-        stopButton?.setOnClickListener {
-            finishRecording(upload = true)
-            hapticTap()
-        }
         cancelButton?.setOnClickListener { onCancelTapped() }
         retryButton?.setOnClickListener {
             retryLast()
@@ -207,14 +205,14 @@ class VoiceImeService : InputMethodService() {
     /**
      * Minimal programmatic input view used when XML inflation throws (custom
      * views, M3 styles, theme attrs can all fail per-device). Framework widgets
-     * only; reuses imeMic/imeStatus ids so existing listeners and renderState
-     * keep working. All other view fields are nulled so renderState's ?.
-     * logic skips them.
+     * only; reuses imeTransport/imeStatus ids so existing listeners and
+     * renderState keep working. All other view fields are nulled so
+     * renderState's ?. logic skips them.
      */
     private fun buildFallbackView(): View {
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val mic = Button(this).apply {
-            id = R.id.imeMic
+            id = R.id.imeTransport
             text = getString(R.string.ime_mic_description)
             setOnClickListener { onMicTapped() }
         }
@@ -225,6 +223,8 @@ class VoiceImeService : InputMethodService() {
         layout.addView(mic)
         layout.addView(status)
         micButton = mic
+        transportIcon = null
+        transportLabel = null
         statusText = status
         timerText = null
         waveView = null
@@ -233,13 +233,12 @@ class VoiceImeService : InputMethodService() {
         dotRecording = null
         dotUploading = null
         dotError = null
-        stopButton = null
         cancelButton = null
         retryButton = null
         settingsButton = null
         enterButton = null
         actionsRow = null
-        clipChip = null
+        clipBadge = null
         rootView = layout
         renderState()
         return layout
@@ -856,7 +855,22 @@ class VoiceImeService : InputMethodService() {
         val uploading = state == State.UPLOADING
         val error = state == State.ERROR
         micButton?.isEnabled = !uploading
-        // TalkBack: the mic disc doubles as stop while recording.
+        // Transport pill: icon + label follow state (mic idle, stop
+        // recording, sending uploading). Timer ticks inside the pill.
+        // Ghost cancel sits in-row while recording/uploading — no second
+        // button row.
+        val pillRes = if (recording) {
+            R.string.ime_transport_stop
+        } else if (uploading) {
+            R.string.ime_transport_uploading
+        } else {
+            R.string.ime_transport_idle
+        }
+        transportLabel?.text = getString(pillRes)
+        transportIcon?.setImageResource(
+            if (recording) android.R.drawable.ic_media_pause
+            else android.R.drawable.ic_btn_speak_now,
+        )
         val micDesc = if (recording) {
             getString(R.string.ime_mic_stop_description)
         } else {
@@ -865,17 +879,14 @@ class VoiceImeService : InputMethodService() {
         if (micButton?.contentDescription?.toString() != micDesc) {
             micButton?.contentDescription = micDesc
         }
-        setVisible(stopButton, recording)
-        // Timer lives next to Stop: visible only while it ticks.
         setVisible(timerText, recording)
         // Collapse the actions row unless a child is actually visible:
-        // Cancel shows mid-record/upload while Retry/Settings show on error,
-        // so the row follows child visibility — never state directly — or a
-        // visible Cancel ends up trapped inside a GONE row. Idle stays compact.
+        // Cancel now lives in the transport row but still joins the rule,
+        // so the wiring stays uniform if it ever moves back.
         val showCancel = recording || uploading
+        setVisible(cancelButton, showCancel)
         val showRetry = error && lastWav != null
         val showSettings = error
-        setVisible(cancelButton, showCancel)
         setVisible(retryButton, showRetry)
         setVisible(settingsButton, showSettings)
         setVisible(
@@ -971,14 +982,14 @@ class VoiceImeService : InputMethodService() {
      * password, or nothing is saved yet — the strip never takes space.
      */
     private fun renderClipChip(entries: List<ClipboardEntry>) {
-        val chip = clipChip ?: return
+        val badge = clipBadge ?: return
         if (passwordField || entries.isEmpty()) {
-            setVisible(chip, false)
+            setVisible(badge, false)
             return
         }
-        chip.text = getString(R.string.clipboard_chip_count, entries.size)
-        chip.contentDescription = getString(R.string.clipboard_open_manager)
-        setVisible(chip, true)
+        badge.text = getString(R.string.clipboard_chip_count, entries.size)
+        badge.contentDescription = getString(R.string.clipboard_open_manager)
+        setVisible(badge, true)
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {

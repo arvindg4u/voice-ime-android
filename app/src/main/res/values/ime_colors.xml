@@ -8,6 +8,7 @@
     <color name="ime_text_primary">#FFF2F2F2</color>
     <color name="ime_text_secondary">#FFC7C7C7</color>
     <color name="ime_accent">#FF6750A4</color>
+    <color name="ime_on_accent">#FFFFFFFF</color>
     <color name="ime_mic_disabled">#FF3C3C3C</color>
     <color name="ime_dot_idle">#FF808080</color>
     <color name="ime_dot_recording">#FFD0BCFF</color>

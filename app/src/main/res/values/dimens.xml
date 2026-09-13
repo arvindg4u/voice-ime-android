@@ -4,9 +4,8 @@
 <resources>
     <!-- IME voice view -->
     <dimen name="voice_wave_height">40dp</dimen>
-    <dimen name="voice_mic_size">56dp</dimen>
-    <dimen name="voice_strip_min_height">40dp</dimen>
     <dimen name="voice_button_min_height">48dp</dimen>
+    <dimen name="voice_transport_height">56dp</dimen>
     <dimen name="voice_horizontal_padding">12dp</dimen>
     <dimen name="voice_row_spacing">4dp</dimen>
     <dimen name="voice_status_text_size">13sp</dimen>
