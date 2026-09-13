@@ -3,6 +3,7 @@ package com.voiceime
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 
@@ -29,6 +30,10 @@ class WaveformView @JvmOverloads constructor(
     private var lastInvalidateMs = 0L
     /** Bar-width cap; resources.getDimension() must not run per onDraw. */
     private var maxBarPx = 0f
+    /** Cached bar layout; recomputed in onSizeChanged, never per onDraw. */
+    private var geo: ImeLayoutPolicy.BarGeometry = ImeLayoutPolicy.BarGeometry(0f, 0f, 0f)
+    /** Reused rounded-bar rect; onDraw must not allocate per bar. */
+    private val barRect = RectF()
     /** True once reset() (the service's idle signal) clears live levels. */
     private var idle = true
     /** Sine phase of the idle pulse; advanced one step per idle frame. */
@@ -36,14 +41,20 @@ class WaveformView @JvmOverloads constructor(
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-        val a = context.obtainStyledAttributes(intArrayOf(com.google.android.material.R.attr.colorPrimary))
-        try {
-            barPaint.color = a.getColor(0, DEFAULT_BAR_COLOR)
-        } finally {
-            a.recycle()
-        }
+        // Dynamic accent via @color/ime_wave_bar (wallpaper-driven on
+        // API 31+, static M3 baseline fallback below). No ?attr/ lookup:
+        // the IME process runs under the system input-method theme.
+        barPaint.color = resolveBarColor(context)
         barPaint.style = Paint.Style.FILL
         maxBarPx = context.resources.getDimension(R.dimen.voice_wave_bar_max_width)
+    }
+
+    private fun resolveBarColor(context: Context): Int {
+        return try {
+            androidx.core.content.ContextCompat.getColor(context, R.color.ime_wave_bar)
+        } catch (e: Exception) {
+            DEFAULT_BAR_COLOR
+        }
     }
 
     /** Push a 0..1 amplitude; invalidates at most ~30fps and only on change > 0.02. */
@@ -75,6 +86,7 @@ class WaveformView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         maxBarPx = resources.getDimension(R.dimen.voice_wave_bar_max_width)
+        geo = ImeLayoutPolicy.barGeometry(w.toFloat(), BAR_COUNT, maxBarPx, BAR_WIDTH_FRACTION)
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -83,10 +95,11 @@ class WaveformView @JvmOverloads constructor(
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
         val centerY = h / 2f
-        // Cap bar width and center the strip so wide tablets show grouped
-        // bars instead of a sparse full-width stretch (ImeLayoutPolicy).
-        val geo = ImeLayoutPolicy.barGeometry(w, BAR_COUNT, maxBarPx, BAR_WIDTH_FRACTION)
-        val radius = geo.barW / 2f
+        // Cached geometry (onSizeChanged) + reused rect: zero per-frame
+        // allocation across the 48-bar loop.
+        val slotW = geo.slotW
+        val barW = geo.barW
+        val radius = barW / 2f
         // MIN_BAR_PX is raw px by design (hairline floor on all densities).
         for (i in 0 until BAR_COUNT) {
             val level = levels[i]
@@ -94,8 +107,9 @@ class WaveformView @JvmOverloads constructor(
             val ripple = if (level <= 0f) ImeLayoutPolicy.idleRippleFraction(idlePhase, i) else 0f
             val frac = (level * BAR_MAX_FRACTION + ripple).coerceAtMost(1f)
             val barH = (frac * h).coerceAtLeast(MIN_BAR_PX)
-            val left = geo.startX + i * geo.slotW + (geo.slotW - geo.barW) / 2f
-            canvas.drawRoundRect(left, centerY - barH / 2f, left + geo.barW, centerY + barH / 2f, radius, radius, barPaint)
+            val left = geo.startX + i * slotW + (slotW - barW) / 2f
+            barRect.set(left, centerY - barH / 2f, left + barW, centerY + barH / 2f)
+            canvas.drawRoundRect(barRect, radius, radius, barPaint)
         }
         if (idle) {
             idlePhase += IDLE_PHASE_STEP
@@ -120,7 +134,7 @@ class WaveformView @JvmOverloads constructor(
         private const val MIN_INVALIDATE_INTERVAL_MS = 33L
         /** Idle pulse speed: ~2 s per sine cycle at the idle frame rate. */
         private const val IDLE_PHASE_STEP = 0.1f
-        /** Idle frame cadence: 20fps is smooth for a slow pulse, cheaper than 30. */
-        private const val IDLE_FRAME_DELAY_MS = 50L
+        /** Idle frame cadence: ~12fps is smooth for a slow pulse, cheaper than 20. */
+        private const val IDLE_FRAME_DELAY_MS = 80L
     }
 }

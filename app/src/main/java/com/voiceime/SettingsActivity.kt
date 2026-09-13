@@ -4,9 +4,9 @@ import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import android.view.WindowManager
-import android.widget.Button
-import android.widget.Switch
 import android.widget.Toast
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.materialswitch.MaterialSwitch
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.textfield.TextInputEditText
@@ -40,20 +40,20 @@ class SettingsActivity : AppCompatActivity() {
         modelField.setText(settings.model)
         customPromptField.setText(settings.customPrompt)
 
-        findViewById<Button>(R.id.settingsSave).setOnClickListener { save() }
-        findViewById<Button>(R.id.settingsTest).setOnClickListener { test() }
-        findViewById<Button>(R.id.settingsEnableKeyboard).setOnClickListener {
+        findViewById<MaterialButton>(R.id.settingsSave).setOnClickListener { save() }
+        findViewById<MaterialButton>(R.id.settingsTest).setOnClickListener { test() }
+        findViewById<MaterialButton>(R.id.settingsEnableKeyboard).setOnClickListener {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
         }
-        val clipToggle = findViewById<Switch>(R.id.settingsClipboardToggle)
+        val clipToggle = findViewById<MaterialSwitch>(R.id.settingsClipboardToggle)
         clipToggle.isChecked = ClipboardHistoryActivity.isEnabled(this)
         clipToggle.setOnCheckedChangeListener { _, checked ->
             setClipHistoryEnabled(checked)
         }
-        findViewById<Button>(R.id.settingsOpenClipboard).setOnClickListener {
+        findViewById<MaterialButton>(R.id.settingsOpenClipboard).setOnClickListener {
             startActivity(Intent(this, ClipboardHistoryActivity::class.java))
         }
-        val smartSwitch = findViewById<Switch>(R.id.settingsSmartToggle)
+        val smartSwitch = findViewById<MaterialSwitch>(R.id.settingsSmartToggle)
         smartSwitch.isChecked = settings.smartMode
         smartSwitch.setOnCheckedChangeListener { _, checked ->
             settings.smartMode = checked
@@ -62,9 +62,9 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        findViewById<Switch>(R.id.settingsClipboardToggle)?.isChecked =
+        findViewById<MaterialSwitch>(R.id.settingsClipboardToggle)?.isChecked =
             ClipboardHistoryActivity.isEnabled(this)
-        findViewById<Switch>(R.id.settingsSmartToggle)?.isChecked = settings.smartMode
+        findViewById<MaterialSwitch>(R.id.settingsSmartToggle)?.isChecked = settings.smartMode
     }
 
     private fun setClipHistoryEnabled(checked: Boolean) {
@@ -93,7 +93,7 @@ class SettingsActivity : AppCompatActivity() {
      * Runs off the main thread; the button is re-enabled in all paths.
      */
     private fun test() {
-        val testButton = findViewById<Button>(R.id.settingsTest)
+        val testButton = findViewById<MaterialButton>(R.id.settingsTest)
         val keys = apiKeyField.text?.toString().orEmpty()
             .split("\n").map { it.trim() }.filter { it.isNotEmpty() }
         val url = baseUrlField.text?.toString().orEmpty()

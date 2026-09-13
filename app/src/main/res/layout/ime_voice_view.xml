@@ -4,14 +4,21 @@
      (Theme.DeviceDefault.InputMethod), not our app theme, so any
      ?attr/colorSurface etc. throws UnsupportedOperationException at
      inflation and the keyboard never appears. System colors and
-     framework widgets only. -->
+     framework widgets only — dynamic color via @color/ime_* tokens
+     (values-v31/ maps them to wallpaper-driven @android:color/system_*).
+     Structure: status row + waveform + ONE single-line transport bar
+     [pill | ghost cancel | clip badge | Enter]. Error-only Retry/Settings
+     row below; no control second row. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:gravity="center_horizontal"
-    android:background="@android:color/system_neutral1_900"
-    android:padding="@dimen/voice_horizontal_padding">
+    android:background="@color/ime_surface"
+    android:paddingStart="@dimen/voice_horizontal_padding"
+    android:paddingEnd="@dimen/voice_horizontal_padding"
+    android:paddingTop="@dimen/voice_row_spacing"
+    android:paddingBottom="@dimen/voice_row_spacing">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -20,7 +27,8 @@
         android:maxWidth="@dimen/voice_content_max_width"
         android:orientation="vertical">
 
-    <!-- Top status row: state dot + status + timer right -->
+    <!-- Live status: state dot + transcript preview (tail-follow: head
+         ellipsis keeps the latest words visible without height growth). -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -39,73 +47,118 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:layout_marginStart="6dp"
+            android:ellipsize="start"
+            android:maxLines="1"
+            android:singleLine="true"
             android:text="@string/ime_status_idle"
-            android:textColor="@android:color/system_neutral1_50"
+            android:textColor="@color/ime_text_primary"
             android:textSize="@dimen/voice_status_text_size" />
-
-        <TextView
-            android:id="@+id/imeTimer"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="0:00"
-            android:textColor="@android:color/system_neutral1_300"
-            android:textSize="@dimen/voice_timer_text_size" />
     </LinearLayout>
 
-    <!-- HERO waveform (compact tall, full-width touch not needed — decorative) -->
+    <!-- HERO waveform (decorative; contentDescription suppressed in code) -->
     <com.voiceime.WaveformView
         android:id="@+id/imeWave"
         android:layout_width="match_parent"
         android:layout_height="@dimen/voice_wave_height"
-        android:layout_marginTop="8dp" />
+        android:layout_marginTop="@dimen/voice_row_spacing" />
 
-    <!-- Clipboard history strip (framework widgets, system colors only). -->
-    <include layout="@layout/ime_clipboard_strip" />
-
-    <!-- Mic row: compact mic left, Stop pill, Enter right -->
+    <!-- Single-line transport bar: state pill (mic/stop + timer) |
+         ghost cancel (recording/uploading only) | clip badge (saved
+         clips only) | Enter. Everything GONE-unless-needed lives in
+         this one row — no second button row, no strip line. -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="@dimen/voice_row_spacing"
         android:orientation="horizontal"
         android:gravity="center_vertical">
 
         <ImageButton
-            android:id="@+id/imeMic"
-            android:layout_width="@dimen/voice_mic_size"
-            android:layout_height="@dimen/voice_mic_size"
-            android:background="@android:drawable/btn_default"
-            android:contentDescription="@string/ime_mic_description"
-            android:src="@android:drawable/ic_btn_speak_now" />
+            android:id="@+id/imeBack"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/ime_back_description"
+            android:src="@drawable/ic_back" />
 
-        <Button
-            android:id="@+id/imeStop"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:minHeight="@dimen/voice_button_min_height"
-            android:text="@string/ime_stop"
-            android:textSize="@dimen/voice_action_text_size"
+        <LinearLayout
+            android:id="@+id/imeTransport"
+            android:layout_marginStart="4dp"
+            android:layout_width="0dp"
+            android:layout_height="@dimen/voice_transport_height"
+            android:layout_weight="1"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="@drawable/ime_transport_pill"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp">
+
+            <ImageView
+                android:id="@+id/imeTransportIcon"
+                android:layout_width="20dp"
+                android:layout_height="20dp"
+                android:src="@android:drawable/ic_btn_speak_now" />
+
+            <TextView
+                android:id="@+id/imeTransportLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="@string/ime_transport_idle"
+                android:textColor="@color/ime_on_accent"
+                android:textSize="@dimen/voice_action_text_size" />
+
+            <TextView
+                android:id="@+id/imeTimer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="0:00"
+                android:textColor="@color/ime_on_accent"
+                android:textSize="@dimen/voice_timer_text_size"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <ImageButton
+            android:id="@+id/imeCancel"
+            android:layout_width="48dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="4dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/ime_cancel"
+            android:src="@android:drawable/ic_menu_close_clear_cancel"
             android:visibility="gone" />
 
-        <View
-            android:layout_width="0dp"
-            android:layout_height="0dp"
-            android:layout_weight="1" />
+        <Button
+            android:id="@+id/imeClipBadge"
+            android:layout_width="wrap_content"
+            android:layout_height="@dimen/voice_button_min_height"
+            android:layout_marginStart="2dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:minWidth="0dp"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:textColor="@color/ime_accent"
+            android:textSize="@dimen/clip_strip_text_size"
+            android:visibility="gone" />
 
         <Button
             android:id="@+id/imeEnter"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minHeight="@dimen/voice_button_min_height"
+            android:layout_height="@dimen/voice_button_min_height"
+            android:layout_marginStart="2dp"
+            android:background="?android:attr/selectableItemBackgroundBorderless"
+            android:minWidth="0dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
             android:contentDescription="@string/ime_enter_description"
             android:text="@string/ime_enter"
+            android:textColor="@color/ime_accent"
             android:textSize="@dimen/voice_action_text_size" />
     </LinearLayout>
 
-    <!-- Second row: text buttons. GONE unless a child is visible (Cancel
-         mid-record/upload, Retry/Settings on error); renderState() follows
-         child visibility via ImeLayoutPolicy so idle stays compact. -->
+    <!-- Error row: Retry/Settings appear here only on error.
+         GONE otherwise; Cancel lives in the transport row. -->
     <LinearLayout
         android:id="@+id/imeActionsRow"
         android:layout_width="match_parent"
@@ -113,14 +166,6 @@
         android:layout_marginTop="2dp"
         android:orientation="horizontal"
         android:visibility="gone">
-
-        <Button
-            android:id="@+id/imeCancel"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minHeight="@dimen/voice_button_min_height"
-            android:text="@string/ime_cancel"
-            android:textSize="@dimen/voice_action_text_size" />
 
         <Button
             android:id="@+id/imeRetry"
@@ -148,7 +193,7 @@
         android:maxLines="1"
         android:singleLine="true"
         android:text="@string/ime_hint_clips"
-        android:textColor="@android:color/system_neutral1_300"
+        android:textColor="@color/ime_text_secondary"
         android:textSize="@dimen/voice_hint_text_size" />
     </LinearLayout>
 </LinearLayout>

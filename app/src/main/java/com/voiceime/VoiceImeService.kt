@@ -21,7 +21,6 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.BaseAdapter
 import android.widget.Button
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.PopupWindow
@@ -48,8 +47,6 @@ class VoiceImeService : InputMethodService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     companion object {
-        /** Max history previews shown inline in the IME strip. */
-        const val CLIP_STRIP_LIMIT = 8
 
         /**
          * Minimum gap between mic-blocked evaluations in onLevelChanged.
@@ -87,8 +84,11 @@ class VoiceImeService : InputMethodService() {
     }
 
     private var rootView: View? = null
-    /** Mic control: FAB (ImageButton) in the normal view, plain Button in fallback. */
+    /** Transport pill (start/stop) in the normal view, plain Button in fallback. */
     private var micButton: View? = null
+    private var transportIcon: android.widget.ImageView? = null
+    private var transportLabel: TextView? = null
+    private var backButton: View? = null
     private var statusText: TextView? = null
     /** True when the input view is the programmatic minimal fallback (inflate failed). */
     private var fallbackMode = false
@@ -99,16 +99,14 @@ class VoiceImeService : InputMethodService() {
     private var dotRecording: ColorStateList? = null
     private var dotUploading: ColorStateList? = null
     private var dotError: ColorStateList? = null
-    private var stopButton: Button? = null
-    private var cancelButton: Button? = null
+    private var cancelButton: View? = null
     private var retryButton: Button? = null
     private var settingsButton: Button? = null
     private var enterButton: Button? = null
     private var lastEditorInfo: EditorInfo? = null
     private var clipboardStore: ClipboardStore? = null
-    private var clipStripScroll: HorizontalScrollView? = null
-    private var clipStrip: LinearLayout? = null
-    private var clipMoreButton: Button? = null
+    /** History badge in the transport row: count, opens the popup. */
+    private var clipBadge: Button? = null
     private var clipEntries: List<ClipboardEntry> = emptyList()
     private var clipListener: ClipboardManager.OnPrimaryClipChangedListener? = null
     private var lastClipFingerprint: Int = 0
@@ -165,42 +163,32 @@ class VoiceImeService : InputMethodService() {
 
     private fun inflateInputView(): View {
         val view = layoutInflater.inflate(R.layout.ime_voice_view, null)
-        micButton = view.findViewById(R.id.imeMic)
+        micButton = view.findViewById(R.id.imeTransport)
+        transportIcon = view.findViewById(R.id.imeTransportIcon)
+        transportLabel = view.findViewById(R.id.imeTransportLabel)
         statusText = view.findViewById(R.id.imeStatus)
         timerText = view.findViewById(R.id.imeTimer)
         waveView = view.findViewById(R.id.imeWave)
         statusDot = view.findViewById(R.id.imeStatusDot)
-        val attrs = intArrayOf(
-            com.google.android.material.R.attr.colorOutlineVariant,
-            com.google.android.material.R.attr.colorPrimary,
-            com.google.android.material.R.attr.colorTertiary,
-            com.google.android.material.R.attr.colorError,
-        )
-        val ta = obtainStyledAttributes(attrs)
-        try {
-            dotIdle = ColorStateList.valueOf(ta.getColor(0, 0xFF808080.toInt()))
-            dotRecording = ColorStateList.valueOf(ta.getColor(1, 0xFF808080.toInt()))
-            dotUploading = ColorStateList.valueOf(ta.getColor(2, 0xFF808080.toInt()))
-            dotError = ColorStateList.valueOf(ta.getColor(3, 0xFF808080.toInt()))
-        } finally {
-            ta.recycle()
-        }
-        stopButton = view.findViewById(R.id.imeStop)
+        // Dynamic-color dot tints via @color/ime_* tokens (values-v31 maps
+        // them to wallpaper-driven system colors). No ?attr/ lookups here:
+        // the IME runs under the system input-method theme where M3 attrs
+        // don't resolve.
+        dotIdle = ColorStateList.valueOf(getColor(R.color.ime_dot_idle))
+        dotRecording = ColorStateList.valueOf(getColor(R.color.ime_dot_recording))
+        dotUploading = ColorStateList.valueOf(getColor(R.color.ime_dot_uploading))
+        dotError = ColorStateList.valueOf(getColor(R.color.ime_dot_error))
         cancelButton = view.findViewById(R.id.imeCancel)
         retryButton = view.findViewById(R.id.imeRetry)
         settingsButton = view.findViewById(R.id.imeSettings)
         enterButton = view.findViewById(R.id.imeEnter)
         actionsRow = view.findViewById(R.id.imeActionsRow)
-        clipStripScroll = view.findViewById(R.id.imeClipStripScroll)
-        clipStrip = view.findViewById(R.id.imeClipStrip)
-        clipMoreButton = view.findViewById(R.id.imeClipMore)
-        clipMoreButton?.setOnClickListener { showClipPopup() }
+        clipBadge = view.findViewById(R.id.imeClipBadge)
+        clipBadge?.setOnClickListener { showClipPopup() }
+        backButton = view.findViewById(R.id.imeBack)
+        backButton?.setOnClickListener { onBackTapped() }
 
         micButton?.setOnClickListener { onMicTapped() }
-        stopButton?.setOnClickListener {
-            finishRecording(upload = true)
-            hapticTap()
-        }
         cancelButton?.setOnClickListener { onCancelTapped() }
         retryButton?.setOnClickListener {
             retryLast()
@@ -220,14 +208,14 @@ class VoiceImeService : InputMethodService() {
     /**
      * Minimal programmatic input view used when XML inflation throws (custom
      * views, M3 styles, theme attrs can all fail per-device). Framework widgets
-     * only; reuses imeMic/imeStatus ids so existing listeners and renderState
-     * keep working. All other view fields are nulled so renderState's ?.
-     * logic skips them.
+     * only; reuses imeTransport/imeStatus ids so existing listeners and
+     * renderState keep working. All other view fields are nulled so
+     * renderState's ?. logic skips them.
      */
     private fun buildFallbackView(): View {
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val mic = Button(this).apply {
-            id = R.id.imeMic
+            id = R.id.imeTransport
             text = getString(R.string.ime_mic_description)
             setOnClickListener { onMicTapped() }
         }
@@ -238,6 +226,8 @@ class VoiceImeService : InputMethodService() {
         layout.addView(mic)
         layout.addView(status)
         micButton = mic
+        transportIcon = null
+        transportLabel = null
         statusText = status
         timerText = null
         waveView = null
@@ -246,15 +236,13 @@ class VoiceImeService : InputMethodService() {
         dotRecording = null
         dotUploading = null
         dotError = null
-        stopButton = null
         cancelButton = null
         retryButton = null
         settingsButton = null
         enterButton = null
         actionsRow = null
-        clipStripScroll = null
-        clipStrip = null
-        clipMoreButton = null
+        clipBadge = null
+        backButton = null
         rootView = layout
         renderState()
         return layout
@@ -378,6 +366,34 @@ class VoiceImeService : InputMethodService() {
             return
         }
         ic.performEditorAction(actionId)
+    }
+
+    /**
+     * Back to the previously used keyboard (Google voice-typing style).
+     * switchToPreviousInputMethod() restores the last IME when the system
+     * tracks one; otherwise fall back to the system picker. Recording is
+     * left running — the user returns via the system switcher.
+     */
+    private fun onBackTapped() {
+        hapticTap()
+        val switched = try {
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                switchToPreviousInputMethod()
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            false
+        }
+        if (!switched) {
+            try {
+                (getSystemService(INPUT_METHOD_SERVICE)
+                    as? android.view.inputmethod.InputMethodManager)
+                    ?.showInputMethodPicker()
+            } catch (e: Exception) {
+                // No switcher available; stay put.
+            }
+        }
     }
 
     private fun onCancelTapped() {
@@ -791,6 +807,9 @@ class VoiceImeService : InputMethodService() {
         renderState()
         refreshClipStrip()
         statusText?.setText(R.string.ime_status_idle)
+        statusText?.announceForAccessibility(
+            getString(R.string.ime_announced_committed, text.take(120)),
+        )
         hapticConfirm()
         if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
             Toast.makeText(this, R.string.ime_copied_paste, Toast.LENGTH_SHORT).show()
@@ -805,6 +824,7 @@ class VoiceImeService : InputMethodService() {
         state = State.ERROR
         renderState()
         statusText?.text = message
+        statusText?.announceForAccessibility(message)
         if (entering) hapticTap()
     }
 
@@ -866,15 +886,38 @@ class VoiceImeService : InputMethodService() {
         val uploading = state == State.UPLOADING
         val error = state == State.ERROR
         micButton?.isEnabled = !uploading
-        setVisible(stopButton, recording)
+        // Transport pill: icon + label follow state (mic idle, stop
+        // recording, sending uploading). Timer ticks inside the pill.
+        // Ghost cancel sits in-row while recording/uploading — no second
+        // button row.
+        val pillRes = if (recording) {
+            R.string.ime_transport_stop
+        } else if (uploading) {
+            R.string.ime_transport_uploading
+        } else {
+            R.string.ime_transport_idle
+        }
+        transportLabel?.text = getString(pillRes)
+        transportIcon?.setImageResource(
+            if (recording) android.R.drawable.ic_media_pause
+            else android.R.drawable.ic_btn_speak_now,
+        )
+        val micDesc = if (recording) {
+            getString(R.string.ime_mic_stop_description)
+        } else {
+            getString(R.string.ime_mic_description)
+        }
+        if (micButton?.contentDescription?.toString() != micDesc) {
+            micButton?.contentDescription = micDesc
+        }
+        setVisible(timerText, recording)
         // Collapse the actions row unless a child is actually visible:
-        // Cancel shows mid-record/upload while Retry/Settings show on error,
-        // so the row follows child visibility — never state directly — or a
-        // visible Cancel ends up trapped inside a GONE row. Idle stays compact.
+        // Cancel now lives in the transport row but still joins the rule,
+        // so the wiring stays uniform if it ever moves back.
         val showCancel = recording || uploading
+        setVisible(cancelButton, showCancel)
         val showRetry = error && lastWav != null
         val showSettings = error
-        setVisible(cancelButton, showCancel)
         setVisible(retryButton, showRetry)
         setVisible(settingsButton, showSettings)
         setVisible(
@@ -945,15 +988,9 @@ class VoiceImeService : InputMethodService() {
     }
 
     private fun refreshClipStrip() {
-        val strip = clipStrip ?: return
-        val scroll = clipStripScroll ?: return
         if (!ClipboardHistoryActivity.isEnabled(this)) {
             clipEntries = emptyList()
-            mainHandler.post {
-                strip.removeAllViews()
-                clipMoreButton?.let { strip.addView(it) }
-                scroll.visibility = View.GONE
-            }
+            mainHandler.post { renderClipChip(emptyList()) }
             return
         }
         serviceScope.launch {
@@ -966,88 +1003,32 @@ class VoiceImeService : InputMethodService() {
                 emptyList()
             }
             clipEntries = entries
-            mainHandler.post { renderClipStrip(entries) }
+            mainHandler.post { renderClipChip(entries) }
         }
-    }
-
-    private fun renderClipStrip(entries: List<ClipboardEntry>) {
-        val strip = clipStrip ?: return
-        val scroll = clipStripScroll ?: return
-        if (passwordField) {
-            strip.removeAllViews()
-            scroll.visibility = View.GONE
-            return
-        }
-        strip.removeAllViews()
-        val limit = clipStripLimit()
-        var visible = entries.take(limit)
-        if (visible.isEmpty()) {
-            clipMoreButton?.let { strip.addView(it) }
-            scroll.visibility = View.GONE
-            return
-        }
-        for (entry in visible) {
-            val button = Button(this).apply {
-                text = ClipboardPolicy.sanitizePreview(entry)
-                textSize = resources.getDimension(R.dimen.clip_strip_text_size) /
-                    resources.displayMetrics.scaledDensity
-                minHeight = 0
-                minimumHeight = resources.getDimensionPixelSize(R.dimen.voice_strip_min_height)
-                setOnClickListener { commitClipEntry(entry) }
-                setOnLongClickListener {
-                    serviceScope.launch {
-                        val updated = try {
-                            withContext(Dispatchers.IO) { store()?.deleteAt(entry.id) }
-                        } catch (e: Exception) {
-                            null
-                        }
-                        if (updated != null) {
-                            clipEntries = updated
-                            mainHandler.post { renderClipStrip(updated) }
-                        }
-                    }
-                    true
-                }
-            }
-            strip.addView(button)
-        }
-        val more = clipMoreButton
-        if (more != null) {
-            (more.parent as? ViewGroup)?.removeView(more)
-            more.visibility = if (entries.size > limit) View.VISIBLE else View.GONE
-            strip.addView(more)
-        }
-        scroll.visibility = View.VISIBLE
     }
 
     /**
-     * Inline history count: resource base, capped low when the IME window is
-     * narrow (split-screen / divider-drag / small DeX window).
+     * History chip: one compact button with the saved-clip count; tap
+     * opens the full popup. GONE when history is off, the field is a
+     * password, or nothing is saved yet — the strip never takes space.
      */
-    internal fun clipStripLimit(): Int {
-        val compact = ImeLayoutPolicy.isCompactMode(
-            inMultiWindow = false,
-            windowWidthDp = currentWindowWidthDp(),
-        )
-        return ImeLayoutPolicy.clipLimit(CLIP_STRIP_LIMIT, compact)
-    }
-
-    /** Current IME window width in dp; 0 when the view isn't attached yet. */
-    internal fun currentWindowWidthDp(): Float {
-        val view = rootView ?: return 0f
-        val widthPx = view.width
-        if (widthPx <= 0) return 0f
-        val density = resources.displayMetrics.density
-        if (density <= 0f) return 0f
-        return widthPx / density
+    private fun renderClipChip(entries: List<ClipboardEntry>) {
+        val badge = clipBadge ?: return
+        if (passwordField || entries.isEmpty()) {
+            setVisible(badge, false)
+            return
+        }
+        badge.text = getString(R.string.clipboard_chip_count, entries.size)
+        badge.contentDescription = getString(R.string.clipboard_open_manager)
+        setVisible(badge, true)
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
-        // Rotation / divider-drag / fold: re-render against the new window
-        // size (compact caps, clipped popup) and drop a stale popup.
+        // Rotation / divider-drag / fold: re-render the chip and drop a
+        // stale popup.
         dismissClipPopup()
-        renderClipStrip(clipEntries)
+        renderClipChip(clipEntries)
         renderState()
     }
 
@@ -1176,7 +1157,7 @@ class VoiceImeService : InputMethodService() {
                 return@launch
             }
             clipEntries = updated
-            mainHandler.post { renderClipStrip(updated) }
+            mainHandler.post { renderClipChip(updated) }
         }
     }
 
@@ -1241,7 +1222,7 @@ class VoiceImeService : InputMethodService() {
                         clipEntries = updated
                         mainHandler.post {
                             dismissClipPopup()
-                            renderClipStrip(updated)
+                            renderClipChip(updated)
                             if (updated.isNotEmpty()) showClipPopup()
                         }
                     }

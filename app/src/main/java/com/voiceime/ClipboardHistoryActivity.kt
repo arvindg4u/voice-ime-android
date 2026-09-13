@@ -13,15 +13,16 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.BaseAdapter
-import android.widget.Button
 import android.widget.EditText
 import android.widget.Filter
 import android.widget.Filterable
+import android.widget.ImageButton
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.SwitchCompat
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.materialswitch.MaterialSwitch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -30,7 +31,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Full clipboard-history manager (framework widgets only, no RecyclerView).
+ * Full clipboard-history manager (M3 chrome over a ListView adapter).
  * FLAG_SECURE: history never appears in screenshots or the recent-apps thumbnail.
  */
 class ClipboardHistoryActivity : AppCompatActivity() {
@@ -53,25 +54,28 @@ class ClipboardHistoryActivity : AppCompatActivity() {
                 scope.launch {
                     val updated = withContext(Dispatchers.IO) { store.togglePin(entry.id) }
                     adapter.setEntries(updated)
+                    updateEmptyState()
                 }
             },
             onDelete = { entry ->
                 scope.launch {
                     val updated = withContext(Dispatchers.IO) { store.deleteAt(entry.id) }
                     adapter.setEntries(updated)
+                    updateEmptyState()
                 }
             },
         )
 
         findViewById<ListView>(R.id.clipList).adapter = adapter
 
-        val enableSwitch = findViewById<SwitchCompat>(R.id.clipEnable)
+        val enableSwitch = findViewById<MaterialSwitch>(R.id.clipEnable)
         enableSwitch.isChecked = store.enabled
         enableSwitch.setOnCheckedChangeListener { _, checked ->
             setHistoryEnabled(checked)
             scope.launch {
                 withContext(Dispatchers.IO) { store.setEnabled(checked) }
                 adapter.setEntries(store.snapshot())
+                updateEmptyState()
             }
         }
 
@@ -83,19 +87,22 @@ class ClipboardHistoryActivity : AppCompatActivity() {
             }
         })
 
-        findViewById<Button>(R.id.clipClearUnpinned).setOnClickListener {
+        updateEmptyState()
+        findViewById<MaterialButton>(R.id.clipClearUnpinned).setOnClickListener {
             scope.launch {
                 val updated = withContext(Dispatchers.IO) { store.clearUnpinned() }
                 adapter.setEntries(updated)
+                updateEmptyState()
             }
         }
-        findViewById<Button>(R.id.clipClearAll).setOnClickListener {
+        findViewById<MaterialButton>(R.id.clipClearAll).setOnClickListener {
             AlertDialog.Builder(this)
                 .setMessage(R.string.clipboard_clear_all_confirm)
                 .setPositiveButton(android.R.string.ok) { _, _ ->
                     scope.launch {
                         withContext(Dispatchers.IO) { store.clearAll() }
                         adapter.setEntries(store.snapshot())
+                        updateEmptyState()
                     }
                 }
                 .setNegativeButton(android.R.string.cancel, null)
@@ -108,7 +115,17 @@ class ClipboardHistoryActivity : AppCompatActivity() {
         scope.launch {
             val entries = store.loadAsync()
             adapter.setEntries(entries)
+            updateEmptyState()
         }
+    }
+
+    /** Shows the teaching empty state when the visible list is empty. */
+    private fun updateEmptyState() {
+        val empty = adapter.isEmpty
+        findViewById<View>(R.id.clipEmpty)?.visibility =
+            if (empty) View.VISIBLE else View.GONE
+        findViewById<ListView>(R.id.clipList)?.visibility =
+            if (empty) View.GONE else View.VISIBLE
     }
 
     override fun onDestroy() {
@@ -186,13 +203,27 @@ class ClipboardHistoryActivity : AppCompatActivity() {
                 ?: inflater.inflate(R.layout.item_clipboard_entry, parent, false)
             val entry = getItem(position)
             view.findViewById<TextView>(R.id.clipText).text = ClipboardPolicy.sanitizePreview(entry)
-            view.findViewById<Button>(R.id.clipPin).text = if (entry.isPinned) {
+            view.findViewById<TextView>(R.id.clipState).text = if (entry.isPinned) {
+                context.getString(R.string.clipboard_pinned)
+            } else {
+                context.getString(R.string.clipboard_unpinned)
+            }
+            val pin = view.findViewById<ImageButton>(R.id.clipPin)
+            pin.contentDescription = if (entry.isPinned) {
                 context.getString(R.string.clipboard_unpin)
             } else {
                 context.getString(R.string.clipboard_pin)
             }
-            view.findViewById<Button>(R.id.clipPin).setOnClickListener { onPin(entry) }
-            view.findViewById<Button>(R.id.clipDelete).setOnClickListener { onDelete(entry) }
+            // Pinned rows glow with the dynamic accent; unpinned stay neutral.
+            pin.imageTintList = android.content.res.ColorStateList.valueOf(
+                if (entry.isPinned) {
+                    androidx.core.content.ContextCompat.getColor(context, R.color.ime_accent)
+                } else {
+                    androidx.core.content.ContextCompat.getColor(context, android.R.color.darker_gray)
+                },
+            )
+            pin.setOnClickListener { onPin(entry) }
+            view.findViewById<ImageButton>(R.id.clipDelete).setOnClickListener { onDelete(entry) }
             view.setOnClickListener { onTap(entry) }
             return view
         }

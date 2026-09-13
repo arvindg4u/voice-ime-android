@@ -3,10 +3,10 @@
      taller waveform; max-width caps keep strips centered, not stretched. -->
 <resources>
     <dimen name="voice_wave_height">64dp</dimen>
-    <dimen name="voice_mic_size">72dp</dimen>
-    <dimen name="voice_strip_min_height">56dp</dimen>
     <dimen name="voice_button_min_height">56dp</dimen>
+    <dimen name="voice_transport_height">64dp</dimen>
     <dimen name="voice_horizontal_padding">24dp</dimen>
+    <dimen name="voice_row_spacing">6dp</dimen>
     <dimen name="voice_vertical_padding">12dp</dimen>
     <dimen name="voice_content_max_width">560dp</dimen>
     <dimen name="voice_wave_bar_max_width">10dp</dimen>

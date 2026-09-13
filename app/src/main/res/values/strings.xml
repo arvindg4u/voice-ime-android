@@ -4,10 +4,15 @@
 
     <!-- IME view -->
     <string name="ime_mic_description">Start recording</string>
+    <string name="ime_mic_stop_description">Stop recording</string>
+    <string name="ime_back_description">Back to previous keyboard</string>
+    <string name="ime_transport_idle">Tap to speak</string>
+    <string name="ime_transport_stop">Tap to stop</string>
+    <string name="ime_transport_uploading">Sending…</string>
+    <string name="ime_announced_committed">Dictated: %1$s</string>
     <string name="ime_status_idle">Tap the mic and speak</string>
     <string name="ime_status_recording">Recording… tap Stop when done</string>
     <string name="ime_status_uploading">Transcribing…</string>
-    <string name="ime_stop">Stop</string>
     <string name="ime_cancel">Cancel</string>
     <string name="ime_retry">Retry</string>
     <string name="ime_settings">Settings</string>
@@ -34,7 +39,8 @@
     <string name="settings_model_hint">Gemini model, e.g. gemini-2.5-flash</string>
     <string name="settings_custom_prompt">Custom prompt</string>
     <string name="settings_custom_prompt_hint">Custom prompt — e.g. \'Keep Hinglish as-is, add punctuation, reply in Hindi script\'</string>
-    <string name="settings_smart_mode">Smart transcription (cleaned output)</string>
+    <string name="settings_smart_mode">Smart transcription</string>
+    <string name="settings_smart_mode_hint">Cleaned output — removes fillers, fixes punctuation</string>
     <string name="settings_save">Save</string>
     <string name="settings_test">Test</string>
     <string name="settings_enable_keyboard">Enable keyboard</string>
@@ -46,10 +52,10 @@
     <string name="settings_section_personalize">Personalize</string>
     <string name="settings_section_clipboard">Clipboard</string>
     <string name="settings_clipboard_history">Save clipboard history</string>
+    <string name="settings_clipboard_history_hint">On this device only — password fields never saved</string>
     <string name="settings_open_clipboard">Open clipboard manager</string>
 
     <!-- Clipboard history -->
-    <string name="clipboard_more">More</string>
     <string name="clipboard_enable">Clipboard history</string>
     <string name="clipboard_disclosure">Saves copied text on this device only. Nothing leaves the device. Password fields are never saved.</string>
     <string name="clipboard_search">Search history</string>
@@ -62,5 +68,10 @@
     <string name="clipboard_open_manager">Open clipboard manager</string>
     <string name="clipboard_max_count">Max saved items</string>
     <string name="clipboard_empty">No saved clips yet</string>
+    <string name="clipboard_chip_count">\u29C9 %1$d</string>
+    <string name="clipboard_empty_title">No saved clips yet</string>
+    <string name="clipboard_empty_hint">Copied text will appear here</string>
+    <string name="clipboard_pinned">Pinned</string>
+    <string name="clipboard_unpinned">Unpinned</string>
     <string name="clipboard_too_large">Clip too large — not saved</string>
 </resources>
