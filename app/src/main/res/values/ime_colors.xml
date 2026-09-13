@@ -9,8 +9,6 @@
     <color name="ime_text_secondary">#FFC7C7C7</color>
     <color name="ime_accent">#FF6750A4</color>
     <color name="ime_mic_disabled">#FF3C3C3C</color>
-    <color name="ime_accent_bright">#FFD0BCFF</color>
-    <color name="ime_accent_secondary">#FFCCC2DC</color>
     <color name="ime_dot_idle">#FF808080</color>
     <color name="ime_dot_recording">#FFD0BCFF</color>
     <color name="ime_dot_uploading">#FFCCC2DC</color>

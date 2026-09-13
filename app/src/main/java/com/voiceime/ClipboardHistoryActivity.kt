@@ -54,12 +54,14 @@ class ClipboardHistoryActivity : AppCompatActivity() {
                 scope.launch {
                     val updated = withContext(Dispatchers.IO) { store.togglePin(entry.id) }
                     adapter.setEntries(updated)
+                    updateEmptyState()
                 }
             },
             onDelete = { entry ->
                 scope.launch {
                     val updated = withContext(Dispatchers.IO) { store.deleteAt(entry.id) }
                     adapter.setEntries(updated)
+                    updateEmptyState()
                 }
             },
         )
@@ -73,6 +75,7 @@ class ClipboardHistoryActivity : AppCompatActivity() {
             scope.launch {
                 withContext(Dispatchers.IO) { store.setEnabled(checked) }
                 adapter.setEntries(store.snapshot())
+                updateEmptyState()
             }
         }
 
@@ -89,6 +92,7 @@ class ClipboardHistoryActivity : AppCompatActivity() {
             scope.launch {
                 val updated = withContext(Dispatchers.IO) { store.clearUnpinned() }
                 adapter.setEntries(updated)
+                updateEmptyState()
             }
         }
         findViewById<MaterialButton>(R.id.clipClearAll).setOnClickListener {
@@ -98,6 +102,7 @@ class ClipboardHistoryActivity : AppCompatActivity() {
                     scope.launch {
                         withContext(Dispatchers.IO) { store.clearAll() }
                         adapter.setEntries(store.snapshot())
+                        updateEmptyState()
                     }
                 }
                 .setNegativeButton(android.R.string.cancel, null)

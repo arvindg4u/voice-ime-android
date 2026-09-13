@@ -7,8 +7,6 @@
     <color name="ime_text_secondary">@android:color/system_neutral1_300</color>
     <color name="ime_accent">@android:color/system_accent1_600</color>
     <color name="ime_mic_disabled">@android:color/system_neutral1_700</color>
-    <color name="ime_accent_bright">@android:color/system_accent1_300</color>
-    <color name="ime_accent_secondary">@android:color/system_accent2_300</color>
     <color name="ime_dot_idle">@android:color/system_neutral2_500</color>
     <color name="ime_dot_recording">@android:color/system_accent1_300</color>
     <color name="ime_dot_uploading">@android:color/system_accent2_300</color>
