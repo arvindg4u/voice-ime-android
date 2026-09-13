@@ -53,7 +53,6 @@
     <string name="settings_open_clipboard">Open clipboard manager</string>
 
     <!-- Clipboard history -->
-    <string name="clipboard_more">More</string>
     <string name="clipboard_enable">Clipboard history</string>
     <string name="clipboard_disclosure">Saves copied text on this device only. Nothing leaves the device. Password fields are never saved.</string>
     <string name="clipboard_search">Search history</string>
@@ -66,6 +65,7 @@
     <string name="clipboard_open_manager">Open clipboard manager</string>
     <string name="clipboard_max_count">Max saved items</string>
     <string name="clipboard_empty">No saved clips yet</string>
+    <string name="clipboard_chip_count">\u29C9 %1$d</string>
     <string name="clipboard_empty_title">No saved clips yet</string>
     <string name="clipboard_empty_hint">Copied text will appear here</string>
     <string name="clipboard_pinned">Pinned</string>

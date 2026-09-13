@@ -21,7 +21,6 @@ import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.widget.BaseAdapter
 import android.widget.Button
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ListView
 import android.widget.PopupWindow
@@ -48,8 +47,6 @@ class VoiceImeService : InputMethodService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     companion object {
-        /** Max history previews shown inline in the IME strip. */
-        const val CLIP_STRIP_LIMIT = 8
 
         /**
          * Minimum gap between mic-blocked evaluations in onLevelChanged.
@@ -106,9 +103,8 @@ class VoiceImeService : InputMethodService() {
     private var enterButton: Button? = null
     private var lastEditorInfo: EditorInfo? = null
     private var clipboardStore: ClipboardStore? = null
-    private var clipStripScroll: HorizontalScrollView? = null
-    private var clipStrip: LinearLayout? = null
-    private var clipMoreButton: Button? = null
+    /** Compact history chip: count badge opening the full popup. */
+    private var clipChip: Button? = null
     private var clipEntries: List<ClipboardEntry> = emptyList()
     private var clipListener: ClipboardManager.OnPrimaryClipChangedListener? = null
     private var lastClipFingerprint: Int = 0
@@ -184,10 +180,8 @@ class VoiceImeService : InputMethodService() {
         settingsButton = view.findViewById(R.id.imeSettings)
         enterButton = view.findViewById(R.id.imeEnter)
         actionsRow = view.findViewById(R.id.imeActionsRow)
-        clipStripScroll = view.findViewById(R.id.imeClipStripScroll)
-        clipStrip = view.findViewById(R.id.imeClipStrip)
-        clipMoreButton = view.findViewById(R.id.imeClipMore)
-        clipMoreButton?.setOnClickListener { showClipPopup() }
+        clipChip = view.findViewById(R.id.imeClipChip)
+        clipChip?.setOnClickListener { showClipPopup() }
 
         micButton?.setOnClickListener { onMicTapped() }
         stopButton?.setOnClickListener {
@@ -245,9 +239,7 @@ class VoiceImeService : InputMethodService() {
         settingsButton = null
         enterButton = null
         actionsRow = null
-        clipStripScroll = null
-        clipStrip = null
-        clipMoreButton = null
+        clipChip = null
         rootView = layout
         renderState()
         return layout
@@ -954,15 +946,9 @@ class VoiceImeService : InputMethodService() {
     }
 
     private fun refreshClipStrip() {
-        val strip = clipStrip ?: return
-        val scroll = clipStripScroll ?: return
         if (!ClipboardHistoryActivity.isEnabled(this)) {
             clipEntries = emptyList()
-            mainHandler.post {
-                strip.removeAllViews()
-                clipMoreButton?.let { strip.addView(it) }
-                scroll.visibility = View.GONE
-            }
+            mainHandler.post { renderClipChip(emptyList()) }
             return
         }
         serviceScope.launch {
@@ -975,88 +961,32 @@ class VoiceImeService : InputMethodService() {
                 emptyList()
             }
             clipEntries = entries
-            mainHandler.post { renderClipStrip(entries) }
+            mainHandler.post { renderClipChip(entries) }
         }
-    }
-
-    private fun renderClipStrip(entries: List<ClipboardEntry>) {
-        val strip = clipStrip ?: return
-        val scroll = clipStripScroll ?: return
-        if (passwordField) {
-            strip.removeAllViews()
-            scroll.visibility = View.GONE
-            return
-        }
-        strip.removeAllViews()
-        val limit = clipStripLimit()
-        var visible = entries.take(limit)
-        if (visible.isEmpty()) {
-            clipMoreButton?.let { strip.addView(it) }
-            scroll.visibility = View.GONE
-            return
-        }
-        for (entry in visible) {
-            val button = Button(this).apply {
-                text = ClipboardPolicy.sanitizePreview(entry)
-                textSize = resources.getDimension(R.dimen.clip_strip_text_size) /
-                    resources.displayMetrics.scaledDensity
-                minHeight = 0
-                minimumHeight = resources.getDimensionPixelSize(R.dimen.voice_strip_min_height)
-                setOnClickListener { commitClipEntry(entry) }
-                setOnLongClickListener {
-                    serviceScope.launch {
-                        val updated = try {
-                            withContext(Dispatchers.IO) { store()?.deleteAt(entry.id) }
-                        } catch (e: Exception) {
-                            null
-                        }
-                        if (updated != null) {
-                            clipEntries = updated
-                            mainHandler.post { renderClipStrip(updated) }
-                        }
-                    }
-                    true
-                }
-            }
-            strip.addView(button)
-        }
-        val more = clipMoreButton
-        if (more != null) {
-            (more.parent as? ViewGroup)?.removeView(more)
-            more.visibility = if (entries.size > limit) View.VISIBLE else View.GONE
-            strip.addView(more)
-        }
-        scroll.visibility = View.VISIBLE
     }
 
     /**
-     * Inline history count: resource base, capped low when the IME window is
-     * narrow (split-screen / divider-drag / small DeX window).
+     * History chip: one compact button with the saved-clip count; tap
+     * opens the full popup. GONE when history is off, the field is a
+     * password, or nothing is saved yet — the strip never takes space.
      */
-    internal fun clipStripLimit(): Int {
-        val compact = ImeLayoutPolicy.isCompactMode(
-            inMultiWindow = false,
-            windowWidthDp = currentWindowWidthDp(),
-        )
-        return ImeLayoutPolicy.clipLimit(CLIP_STRIP_LIMIT, compact)
-    }
-
-    /** Current IME window width in dp; 0 when the view isn't attached yet. */
-    internal fun currentWindowWidthDp(): Float {
-        val view = rootView ?: return 0f
-        val widthPx = view.width
-        if (widthPx <= 0) return 0f
-        val density = resources.displayMetrics.density
-        if (density <= 0f) return 0f
-        return widthPx / density
+    private fun renderClipChip(entries: List<ClipboardEntry>) {
+        val chip = clipChip ?: return
+        if (passwordField || entries.isEmpty()) {
+            setVisible(chip, false)
+            return
+        }
+        chip.text = getString(R.string.clipboard_chip_count, entries.size)
+        chip.contentDescription = getString(R.string.clipboard_open_manager)
+        setVisible(chip, true)
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
-        // Rotation / divider-drag / fold: re-render against the new window
-        // size (compact caps, clipped popup) and drop a stale popup.
+        // Rotation / divider-drag / fold: re-render the chip and drop a
+        // stale popup.
         dismissClipPopup()
-        renderClipStrip(clipEntries)
+        renderClipChip(clipEntries)
         renderState()
     }
 
@@ -1185,7 +1115,7 @@ class VoiceImeService : InputMethodService() {
                 return@launch
             }
             clipEntries = updated
-            mainHandler.post { renderClipStrip(updated) }
+            mainHandler.post { renderClipChip(updated) }
         }
     }
 
@@ -1250,7 +1180,7 @@ class VoiceImeService : InputMethodService() {
                         clipEntries = updated
                         mainHandler.post {
                             dismissClipPopup()
-                            renderClipStrip(updated)
+                            renderClipChip(updated)
                             if (updated.isNotEmpty()) showClipPopup()
                         }
                     }
