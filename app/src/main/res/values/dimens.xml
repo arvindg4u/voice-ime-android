@@ -14,7 +14,6 @@
     <dimen name="voice_content_max_width">560dp</dimen>
     <dimen name="voice_timer_text_size">12sp</dimen>
     <dimen name="voice_action_text_size">13sp</dimen>
-    <dimen name="voice_hint_text_size">11sp</dimen>
 
     <!-- Clipboard strip + popup -->
     <dimen name="clip_strip_text_size">12sp</dimen>

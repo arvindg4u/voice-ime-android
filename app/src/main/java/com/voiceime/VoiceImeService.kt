@@ -257,6 +257,7 @@ class VoiceImeService : InputMethodService() {
         applyClipPrefs()
         refreshClipStrip()
         registerClipListener()
+        snapshotSystemClip()
         renderState()
     }
 
@@ -886,6 +887,10 @@ class VoiceImeService : InputMethodService() {
         val uploading = state == State.UPLOADING
         val error = state == State.ERROR
         micButton?.isEnabled = !uploading
+        // Recording must survive a tap on Stop: keep the screen awake for
+        // the whole take, otherwise the device sleeps mid-dictation and the
+        // recording is lost. Cleared on every non-recording state below.
+        rootView?.keepScreenOn = recording
         // Transport pill: icon + label follow state (mic idle, stop
         // recording, sending uploading). Timer ticks inside the pill.
         // Ghost cancel sits in-row while recording/uploading — no second
@@ -1112,6 +1117,22 @@ class VoiceImeService : InputMethodService() {
         } catch (e: Exception) {
             // Listener already gone; nothing to do.
         }
+    }
+
+    /**
+     * Gap fix: copies made while the IME was hidden never fired the
+     * listener (unregistered in onWindowHidden/onFinishInputView), so the
+     * history missed the latest clip. Snapshot once on every input-view
+     * start; the fingerprint guard inside drops it if already captured.
+     */
+    private fun snapshotSystemClip() {
+        if (!ClipboardHistoryActivity.isEnabled(this)) return
+        val cm = try {
+            getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        } catch (e: Exception) {
+            return
+        }
+        onPrimaryClipChanged(cm)
     }
 
     /** Point (b): external copies while the IME is visible. Never coerces at bind time. */
