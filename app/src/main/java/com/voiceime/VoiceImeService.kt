@@ -257,6 +257,7 @@ class VoiceImeService : InputMethodService() {
         applyClipPrefs()
         refreshClipStrip()
         registerClipListener()
+        snapshotSystemClip()
         renderState()
     }
 
@@ -778,7 +779,7 @@ class VoiceImeService : InputMethodService() {
             return
         }
         lastWav = null
-        maybeSaveClip(text)
+        val saveJob = maybeSaveClip(text)
         // Clipboard first so the text survives even if commit fails.
         try {
             val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
@@ -805,7 +806,16 @@ class VoiceImeService : InputMethodService() {
         }
         state = State.IDLE
         renderState()
-        refreshClipStrip()
+        // Sequence the chip reload after the history write: both do IO and
+        // would otherwise race, leaving the chip without the new transcript.
+        if (saveJob != null) {
+            serviceScope.launch {
+                saveJob.join()
+                refreshClipStrip()
+            }
+        } else {
+            refreshClipStrip()
+        }
         statusText?.setText(R.string.ime_status_idle)
         statusText?.announceForAccessibility(
             getString(R.string.ime_announced_committed, text.take(120)),
@@ -886,6 +896,10 @@ class VoiceImeService : InputMethodService() {
         val uploading = state == State.UPLOADING
         val error = state == State.ERROR
         micButton?.isEnabled = !uploading
+        // Recording must survive a tap on Stop: keep the screen awake for
+        // the whole take, otherwise the device sleeps mid-dictation and the
+        // recording is lost. Cleared on every non-recording state below.
+        rootView?.keepScreenOn = recording
         // Transport pill: icon + label follow state (mic idle, stop
         // recording, sending uploading). Timer ticks inside the pill.
         // Ghost cancel sits in-row while recording/uploading — no second
@@ -1064,22 +1078,32 @@ class VoiceImeService : InputMethodService() {
     }
 
     /** Captures our own transcript into history (point (a)): before clipboard overwrite. */
-    private fun maybeSaveClip(text: String) {
-        if (!ClipboardHistoryActivity.isEnabled(this)) return
-        if (passwordField) return
+    /**
+     * Saves [text] to history and refreshes the chip when done. Returns the
+     * save job so callers can sequence a reload after it (the store write
+     * and a concurrent load would otherwise race); null when nothing to save.
+     */
+    private fun maybeSaveClip(text: String): Job? {
+        if (!ClipboardHistoryActivity.isEnabled(this)) return null
+        if (passwordField) return null
         if (!ClipboardPolicy.shouldCapture(text)) {
             if (text.length > ClipboardPolicy.MAX_ITEM_CHARS) {
                 mainHandler.post {
                     Toast.makeText(this, R.string.clipboard_too_large, Toast.LENGTH_SHORT).show()
                 }
             }
-            return
+            return null
         }
-        serviceScope.launch {
-            try {
+        return serviceScope.launch {
+            val updated = try {
                 withContext(Dispatchers.IO) { store()?.add(text) }
             } catch (e: Exception) {
                 // History is best-effort; delivery already succeeded.
+                null
+            }
+            if (updated != null) {
+                clipEntries = updated
+                mainHandler.post { renderClipChip(updated) }
             }
         }
     }
@@ -1112,6 +1136,22 @@ class VoiceImeService : InputMethodService() {
         } catch (e: Exception) {
             // Listener already gone; nothing to do.
         }
+    }
+
+    /**
+     * Gap fix: copies made while the IME was hidden never fired the
+     * listener (unregistered in onWindowHidden/onFinishInputView), so the
+     * history missed the latest clip. Snapshot once on every input-view
+     * start; the fingerprint guard inside drops it if already captured.
+     */
+    private fun snapshotSystemClip() {
+        if (!ClipboardHistoryActivity.isEnabled(this)) return
+        val cm = try {
+            getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+        } catch (e: Exception) {
+            return
+        }
+        onPrimaryClipChanged(cm)
     }
 
     /** Point (b): external copies while the IME is visible. Never coerces at bind time. */

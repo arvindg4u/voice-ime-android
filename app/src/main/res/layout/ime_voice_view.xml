@@ -183,17 +183,5 @@
             android:text="@string/ime_settings"
             android:textSize="@dimen/voice_action_text_size" />
     </LinearLayout>
-
-    <TextView
-        android:id="@+id/imeHint"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
-        android:ellipsize="end"
-        android:maxLines="1"
-        android:singleLine="true"
-        android:text="@string/ime_hint_clips"
-        android:textColor="@color/ime_text_secondary"
-        android:textSize="@dimen/voice_hint_text_size" />
     </LinearLayout>
 </LinearLayout>
