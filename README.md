@@ -1,77 +1,447 @@
-# Voice IME
+<div align="center">
 
-A voice-ONLY Android keyboard (InputMethodService). No keys — you speak, the IME
-records 16 kHz mono PCM, sends it as WAV to the Gemini `generateContent` API as
-base64 inline audio, and pastes the transcript via clipboard + `commitText`.
+# 🎙️ Voice IME
 
-## Setup
+**A voice-only Android keyboard. No keys — just speak.**
 
-1. Install the debug APK (built by CI) and open the **Voice IME** app.
-2. Enter **Base URL** (default
+Speak → record → transcribe with Gemini → paste anywhere. A single-purpose
+`InputMethodService` built with Material 3 dynamic color, a live waveform hero,
+and privacy-first, memory-only audio.
+
+[![CI](https://github.com/arvindg4u/voice-ime-android/actions/workflows/android.yml/badge.svg)](https://github.com/arvindg4u/voice-ime-android/actions/workflows/android.yml)
+[![Release](https://img.shields.io/github/v/release/arvindg4u/voice-ime-android?style=flat-square)](https://github.com/arvindg4u/voice-ime-android/releases)
+[![Min SDK](https://img.shields.io/badge/minSdk-26%20(Android%208.0)-3DDC84?style=flat-square&logo=android)](https://developer.android.com/about/versions/oreo)
+[![Target SDK](https://img.shields.io/badge/targetSdk-34-blue?style=flat-square)](https://developer.android.com/about/versions/14)
+[![Kotlin](https://img.shields.io/badge/Kotlin-1.9%2B-7F52FF?style=flat-square&logo=kotlin)](https://kotlinlang.org)
+[![Material 3](https://img.shields.io/badge/Material_3-Dynamic_Color-6750A4?style=flat-square&logo=material-design)](https://m3.material.io)
+
+[Features](#-features) · [Quick start](#-quick-start) · [How it works](#-how-it-works) · [Design](#-design-system) · [Architecture](#-architecture) · [Privacy](#-privacy--security)
+
+</div>
+
+---
+
+## Table of contents
+
+- [Why Voice IME](#why-voice-ime)
+- [✨ Features](#-features)
+- [📸 Screenshots](#-screenshots)
+- [🚀 Quick start](#-quick-start)
+- [⚙️ Configuration](#️-configuration)
+- [🔄 Key rotation](#-key-rotation)
+- [💬 Custom prompt](#-custom-prompt)
+- [🧠 How it works](#-how-it-works)
+- [🎨 Design system](#-design-system)
+- [🏗️ Architecture](#️-architecture)
+- [🛠️ Build from source](#️-build-from-source)
+- [✅ Testing](#-testing)
+- [📏 Limits](#-limits)
+- [🔒 Privacy & security](#-privacy--security)
+- [❓ FAQ & troubleshooting](#-faq--troubleshooting)
+- [🤝 Contributing](#-contributing)
+- [🙏 Acknowledgments](#-acknowledgments)
+
+---
+
+## Why Voice IME
+
+Most keyboards bolt voice on as an afterthought — a tiny mic icon buried in a
+grid of keys. **Voice IME inverts that.** The entire keyboard *is* the
+microphone:
+
+| Traditional keyboard | Voice IME |
+| -------------------- | --------- |
+| 40+ keys, mic hidden in a corner | Zero keys — one transport bar |
+| Typing-first, voice as fallback | Voice-first, voice-only |
+| Opaque "listening…" spinner | Live 48-bar waveform + explicit state dot |
+| Audio uploaded to opaque endpoints | WAV → Gemini `generateContent` you configure, memory-only |
+
+> **Thirty-second pitch:** install the APK, paste a Gemini API key, select
+> Voice IME as your keyboard — then tap 🎙️ and talk in any app.
+
+---
+
+## ✨ Features
+
+- **Voice-only input** — no QWERTY. Tap mic → speak → transcript lands in the
+  text field via clipboard + `commitText` (toast: *"Copied — tap to paste"*).
+- **Live waveform hero** — 48-bar `WaveformView`, invalidates only on amplitude
+  change > 0.02 (~30 fps max, zero per-frame allocation).
+- **Explicit state system** — status dot (idle outline · recording primary ·
+  uploading tertiary · error red) + transport pill + status text. No guessing.
+- **Smart transport bar** — single-line pill with state, ghost cancel, clip
+  badge, and error-only retry row.
+- **Clipboard history** — every transcript saved; badge count, popup, and a
+  dedicated history activity with pin/delete.
+- **Live transcript hardening** — session-id capture + final accumulator so
+  partial results never clobber the final text.
+- **Password-field guard** — password fields require a **second mic tap** to
+  confirm dictation. No accidental leaks.
+- **Context-aware Enter** — Enter button reads `imeOptions` and labels itself
+  Go / Search / Send / Next / Done / Previous (else "Enter"); commits a newline
+  when no action is set. Visible in idle and error states only.
+- **Multi-key rotation** — round-robin across keys with automatic 429 failover
+  and even load spread.
+- **User-shaped transcription** — custom system prompt (≤ 2000 chars) steers
+  formatting, language, and tone — including the Settings Test button.
+- **Live + batch transports** — REST `generateContent` by default, with
+  WebSocket live-transport and Interactions-API routing per model, plus runtime
+  fallback on transport mismatch.
+- **Resilient recording** — Stop button or 5-min auto-stop; mic teardown runs
+  off the UI thread so Stop never janks; granting mic permission auto-resumes a
+  pending tap; blocked-mic detection hints when another app holds the mic.
+
+---
+
+## 📸 Screenshots
+
+> Capture on a Pixel (light + dark) at `docs/images/` and keep filenames
+> stable — the table below is wired to these paths.
+
+| Idle — tap to speak | Recording — live waveform | Uploading — transcribing | Settings |
+| ------------------- | ------------------------- | ------------------------ | -------- |
+| ![IME idle state](docs/images/ime-idle.png) | ![IME recording with waveform](docs/images/ime-recording.png) | ![IME uploading transcript](docs/images/ime-uploading.png) | ![Settings screen](docs/images/settings.png) |
+| *Status dot outline, "Tap to speak"* | *Primary dot, 48 bars dancing, timer + Stop* | *Tertiary dot, "Sending…"* | *Base URL · keys · model · prompt · Test* |
+
+<!-- TODO(contributor): add docs/images/ime-idle.png, ime-recording.png,
+     ime-uploading.png, settings.png (1080×2400, PNG, < 500 KB each).
+     Keep the 4-column table — don't add more screenshots to the README;
+     longer flows belong in docs/ or the release notes. -->
+
+---
+
+## 🚀 Quick start
+
+**You need:** an Android 8.0+ device and a
+[Gemini API key](https://aistudio.google.com/apikey).
+
+```bash
+# Option A — grab the APK (fastest)
+# 1. Open Releases → download the latest app-release.apk
+#    https://github.com/arvindg4u/voice-ime-android/releases
+# 2. Install on device, then follow the 4 steps below.
+
+# Option B — CI debug artifact
+# Actions → latest Android run → Artifacts → app-debug
+```
+
+**4-step setup (on device):**
+
+1. **Install** the APK and open the **Voice IME** app.
+2. **Configure** — enter **Base URL** (default
    `https://generativelanguage.googleapis.com/v1beta`), **API keys** (one per
-   line), and **Model** (e.g. `gemini-2.5-flash`), then Save.
-3. Tap **Enable keyboard**, turn on Voice IME in system input settings, and
-   select it as the current keyboard.
-4. Grant microphone permission when prompted.
+   line), and **Model** (e.g. `gemini-2.5-flash`), then **Save**. Tap **Test**
+   to verify with a 1-second 440 Hz tone.
+3. **Enable** — tap **Enable keyboard**, turn on **Voice IME** in system input
+   settings, and select it as the current keyboard (use the 🌐 switcher or the
+   back-button shortcut in the IME).
+4. **Speak** — tap 🎙️ in any text field, talk, tap **Stop**. Grant microphone
+   permission when prompted (a pending tap auto-resumes after grant).
 
-## Key rotation
+---
 
-Put one API key per line in the keys field. On a request the client tries keys
-in round-robin order starting from its cursor; on HTTP 429 it moves to the next
-key automatically. After a success the cursor advances to
-`(usedIndex + 1) % n`, so load spreads evenly instead of hammering the first
-key. All keys 429'd → "Rate limited on all keys — retry later". Non-429 errors
-(e.g. 401 bad key) fail immediately without burning the other keys.
+## ⚙️ Configuration
 
-## Custom prompt
+All settings live in the **Voice IME** settings activity and persist in
+`EncryptedSharedPreferences`.
 
-The **Custom prompt** field (system instructions, max 2000 chars) is appended
-to the request's `systemInstruction` under a "User preferences:" heading, so it
-shapes every transcription including the Test button tone. Examples: "Add
-punctuation and paragraph breaks" (formatting); "Keep Hinglish words as-is,
-don't translate them" (Hinglish keep-as-is). Leave it blank to disable.
+| Field | Default / example | What it does |
+| ----- | ----------------- | ------------ |
+| **Base URL** | `https://generativelanguage.googleapis.com/v1beta` | Gemini-compatible endpoint. Swap for a proxy or gateway without rebuilding. |
+| **API keys** | one key per line | Round-robin pool with 429 failover (see below). Keys are never logged. |
+| **Model** | `gemini-2.5-flash` | Model appended as `{baseUrl}/models/{model}:generateContent`. Live-marker models route to WebSocket; batch-transcription models route to the Interactions API. |
+| **Custom prompt** | blank (disabled) | System instructions (max 2000 chars) appended under a *"User preferences:"* heading to every request, including Test. |
+| **Smart mode** | off | Model-specific enhanced transcription path where supported. |
 
+---
 
-## Design (M3 Dynamic)
+## 🔄 Key rotation
 
-Material 3 dynamic color (wallpaper-derived on Android 12+, static M3 fallback
-below) with a live waveform hero as the single memorable element. IME state is
-shown by a status dot (outline idle / primary recording / tertiary uploading /
-error red) plus a 48-bar `WaveformView` that invalidates only on amplitude
-change > 0.02 (~30 fps max, zero per-frame allocation).
+Put one API key per line — the client spreads load instead of hammering key #1:
 
-## How it works
+```text
+keys = [k1, k2, k3], cursor starts at 0
+request → try k1 → 429? → try k2 → success → cursor = (1 + 1) % 3 = 2
+next request starts at k3 …
+all keys 429'd → "Rate limited on all keys — retry later"
+401 / other non-429 → fail immediately (never burns the other keys)
+```
 
-Voice → `AudioRecorder` (AudioRecord, VOICE_RECOGNITION, 16 kHz mono 16-bit PCM)
-→ WAV in memory → `LlmClient` POSTs
-`{baseUrl}/models/{model}:generateContent` with
-`{contents:[{parts:[{inlineData:{mimeType:audio/wav,data:base64}},{text:…}}]}]}`
-→ transcript joined from all candidates' parts → copied to clipboard and
-committed with `commitText` (toast: "Copied — tap to paste"). Recording stops
-via Stop button or a 5 min auto-stop; the mic teardown runs off the UI thread
-so Stop never janks. Granting microphone permission auto-resumes a pending mic
-tap. Password fields require a second mic tap
-to confirm. An Enter button performs the editor action named by
-`imeOptions` (label: Go / Search / Send / Next / Done / Previous, else
-"Enter"); with no action set it commits a newline. Visible in idle and
-error states only.
+- **Order:** round-robin from the cursor, wrapping with modulo.
+- **429:** advance to the next key automatically within the same request.
+- **Success:** cursor advances to `(usedIndex + 1) % n` for even spread.
+- **Non-429 (e.g. 401 bad key):** surfaces immediately — a bad key must not
+  consume quota on good keys.
 
-## Limits
+---
 
-- Recording cap is 5 min. At 16 kHz mono 16-bit (32 KB/s ≈ 1.9 MB/min WAV,
-  ×4/3 base64 ≈ 2.6 MB/min JSON) a full 5 min clip is ≈13 MB of request JSON —
-  comfortably under the 20 MB inline-audio ceiling.
-- Gemini transcription supports up to 1 hour of audio; we stay well inside that.
-- Debug APK built by CI — not Play-ready, no release signing.
+## 💬 Custom prompt
 
-## Privacy
+The **Custom prompt** field shapes every transcription:
 
-- Audio lives in memory only and is nulled after each request; nothing is
-  written to disk.
-- API keys are stored in EncryptedSharedPreferences and are never logged.
-- `android:allowBackup=false`; the settings screen sets `FLAG_SECURE`.
+| Goal | Prompt to paste |
+| ---- | --------------- |
+| Formatting | `Add punctuation and paragraph breaks.` |
+| Hinglish keep-as-is | `Keep Hinglish words as-is, don't translate them.` |
+| Hindi script | `Reply in Hindi script (Devanagari).` |
+| Combo | `Keep Hinglish as-is, add punctuation, reply in Hindi script.` |
 
-## Origin
+> Leave it blank to disable. The prompt is sent as `systemInstruction`, so it
+> also steers the **Test** button tone — a handy preview before you dictate.
 
-IME/audio patterns studied from futo-org/android-keyboard
-(FUTO Source First License 1.1-kb); all code reimplemented, no verbatim copy.
+---
+
+## 🧠 How it works
+
+### Pipeline
+
+```mermaid
+flowchart LR
+    A["🎙️ Mic tap<br/>(VoiceImeService)"] --> B["AudioRecorder<br/>AudioRecord · VOICE_RECOGNITION<br/>16 kHz mono 16-bit PCM"]
+    B --> C["WAV in memory<br/>(44-byte RIFF header,<br/>nulled after request)"]
+    C --> D["LlmClient<br/>base64 inline audio + text part<br/>POST {baseUrl}/models/{model}:generateContent"]
+    D --> E["Transcript<br/>(joined across all<br/>candidates' parts)"]
+    E --> F["Clipboard + commitText<br/>(toast: Copied — tap to paste)"]
+```
+
+1. **Capture** — `AudioRecorder` opens `AudioRecord` with `VOICE_RECOGNITION`,
+   16 kHz mono 16-bit PCM. Amplitude callbacks drive the waveform (~30 fps);
+   PCM chunks can additionally stream to the live transport.
+2. **Encode** — PCM → WAV in memory (pure `pcmToWav`, JVM-tested). A built-in
+   1 s 440 Hz `testToneWav()` powers the Settings **Test** button.
+3. **Transcribe** — `LlmClient` (OkHttp; 15 s connect / 90 s read+write)
+   POSTs `{contents:[{parts:[{inlineData:{mimeType:audio/wav,data:base64}},
+   {text:…}}]}]}` with `x-goog-api-key`. Transport routing:
+   live-marker models → `BidiGenerateContent` WebSocket (`LiveSocket`);
+   batch models → Interactions API (`GeminiTransports`); everything else →
+   REST, with runtime fallback on transport mismatch.
+4. **Deliver** — transcript joined from all candidates' parts → written to
+   `ClipboardStore` history → copied to clipboard → `commitText` into the
+   editor. `LiveSessionGuard` + `FinalAccumulator` protect the live tail from
+   overwriting the final text.
+5. **Stop** — Stop button or 5-min auto-stop; mic teardown runs off the UI
+   thread so Stop never janks.
+
+### State machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE : onStartInputView
+    IDLE --> RECORDING : mic tap (+ permission)
+    RECORDING --> UPLOADING : stop / 5-min auto-stop
+    RECORDING --> IDLE : cancel
+    UPLOADING --> IDLE : commitText ✅
+    UPLOADING --> ERROR : empty / network / 429-all / no-speech
+    ERROR --> RECORDING : retry
+    ERROR --> IDLE : cancel / new field
+    RECORDING --> RECORDING : password field needs 2nd tap
+```
+
+---
+
+## 🎨 Design system
+
+**One memorable element:** the live waveform hero. Everything else is chrome
+that gets out of the way.
+
+| Token / element | Value |
+| --------------- | ----- |
+| Theme | Material 3 dynamic color — wallpaper-derived on Android 12+ (`values-v31`), static M3 baseline fallback below |
+| Status dot | outline = idle · primary = recording · tertiary = uploading · red = error (`ime_status_dot.xml`) |
+| Waveform | 48 symmetric rounded bars around a center line; idle sine ripple; recording levels pushed via `setAmplitude` |
+| Transport bar | single-line pill: state label + mic/stop icon · ghost cancel · clip-history badge · error-only retry row |
+| Enter button | idle/error only; label mirrors `imeOptions` action (Go / Search / Send / Next / Done / Previous / Enter) |
+| Back button | returns to the previous keyboard |
+| Perf budget | invalidate only on Δ amplitude > 0.02, ≥ 33 ms apart; zero per-frame allocation (cached `BarGeometry`, reused `RectF`); pulse math in JVM-testable `ImeLayoutPolicy.idleRippleFraction` |
+
+**Design principles:**
+
+- **State is always visible** — dot + pill + text agree; no silent spinners.
+- **One thumb** — mic, stop, cancel, and Enter are reachable without stretching.
+- **Calm errors** — error state keeps the transcript context, offers Retry /
+  Settings inline, and never loses the last clip snapshot.
+
+---
+
+## 🏗️ Architecture
+
+**Stack:** Kotlin · `InputMethodService` · Coroutines · OkHttp · Material 3 ·
+minSdk 26 / targetSdk 34 · Gradle Kotlin DSL · JDK 17.
+
+```text
+app/src/main/java/com/voiceime/      # 16 sources
+├── VoiceImeService.kt               # IME lifecycle, state machine, transport UI
+├── AudioRecorder.kt                 # AudioRecord capture → WAV, levels, 5-min cap
+├── LlmClient.kt                     # REST transcription + key rotation + fallback
+├── LiveSocket.kt                    # WebSocket live transport
+├── GeminiTransports.kt              # transport routing (live / interactions / REST)
+├── LiveSessionGuard.kt              # live-session lifecycle guard
+├── FinalAccumulator.kt              # final-transcript accumulator
+├── WaveformView.kt                  # 48-bar canvas view (stateless service-owned)
+├── ImeLayoutPolicy.kt               # bar geometry + idle ripple (JVM-tested)
+├── ClipboardStore.kt / ClipboardEntry.kt / ClipboardPolicy.kt
+│                                    # history persistence, model, retention rules
+├── ClipboardHistoryActivity.kt      # history UI (pin / delete)
+├── SettingsActivity.kt              # Base URL · keys · model · prompt · Test
+├── SettingsStore.kt                 # EncryptedSharedPreferences wrapper
+└── MicPermissionActivity.kt         # permission grant → auto-resume pending tap
+
+app/src/main/res/
+├── layout/ime_voice_view.xml        # IME root (transport bar + waveform + states)
+├── layout/activity_settings.xml     # settings form
+├── layout/activity_clipboard_history.xml + item_clipboard_entry.xml
+├── xml/method.xml                   # input-method declaration
+└── values*/                         # M3 colors (incl. values-v31 dynamic),
+                                     # dimens (incl. sw600dp), themes, strings
+
+app/src/test/java/com/voiceime/      # 6 unit-test suites (JUnit4 + MockWebServer)
+```
+
+**CI/CD** (`.github/workflows/`): `android.yml` runs unit tests + debug APK on
+every push/PR; `release.yml` builds a signed release APK on `v*` tags via
+`VOICEIME_*` secrets and attaches it to the GitHub Release.
+
+---
+
+## 🛠️ Build from source
+
+```bash
+# Requirements: JDK 17 + Android SDK (compileSdk 34)
+
+git clone https://github.com/arvindg4u/voice-ime-android
+cd voice-ime-android
+
+# Debug APK → app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleDebug
+
+# Unit tests
+./gradlew testDebugUnitTest
+
+# Signed release (needs VOICEIME_KEYSTORE_FILE / VOICEIME_STORE_PASSWORD /
+# VOICEIME_KEY_ALIAS / VOICEIME_KEY_PASSWORD — CI provides these)
+./gradlew assembleRelease
+```
+
+> The debug APK is CI-built and **not Play-ready** — no release signing, no
+> Play Console metadata.
+
+---
+
+## ✅ Testing
+
+| Layer | How |
+| ----- | --- |
+| Unit | `./gradlew testDebugUnitTest` — 6 suites: `AudioRecorder`, `LlmClient` (MockWebServer incl. 429-rotation), `ClipboardStore`, `ClipboardPolicy`, `ImeLayoutPolicy`, `LiveSessionGuard` |
+| Manual Test button | Settings → **Test** sends the 440 Hz tone through the full pipeline with your keys/model/prompt |
+| Manual IME flows | fresh field → dictate → commit · password double-tap · airplane-mode error → retry · rotate keys with an invalid-first key · 5-min auto-stop |
+
+`WaveformView` itself is framework-bound (no unit tests by design) — its math
+lives in `ImeLayoutPolicy` where CI can reach it, and the compile gate keeps
+the view honest.
+
+---
+
+## 📏 Limits
+
+- **Recording cap: 5 min.** At 16 kHz mono 16-bit (32 KB/s ≈ 1.9 MB/min WAV,
+  ×4/3 base64 ≈ 2.6 MB/min JSON) a full clip is ≈ 13 MB of request JSON —
+  comfortably under the 20 MB inline-audio ceiling. Gemini supports up to
+  1 hour; we stay well inside that.
+- **Network-bound** — transcription needs connectivity; offline shows an
+  explicit network error with retry.
+- **Debug distribution** — install via APK/CI artifact; not on Google Play.
+
+---
+
+## 🔒 Privacy & security
+
+- **Memory-only audio** — recordings live in RAM and are nulled after each
+  request. Nothing is written to disk.
+- **Encrypted keys** — API keys in `EncryptedSharedPreferences`
+  (`security-crypto`); never logged (requests log host/model/size only).
+- **No backup, no screenshots** — `android:allowBackup=false`; settings sets
+  `FLAG_SECURE`.
+- **Explicit consent** — `RECORD_AUDIO` is requested at use time; password
+  fields need a deliberate second tap.
+- **Minimal permissions** — only `INTERNET` + `RECORD_AUDIO`. No contacts,
+  location, or storage access.
+
+> Found a vulnerability? Please open a **private security advisory** on GitHub
+> instead of a public issue.
+
+---
+
+## ❓ FAQ & troubleshooting
+
+<details>
+<summary><strong>"No API key — open Settings"</strong></summary>
+
+The key pool is empty. Open the Voice IME app → paste at least one Gemini API
+key (one per line) → Save → Test.
+</details>
+
+<details>
+<summary><strong>"Rate limited on all keys — retry later"</strong></summary>
+
+Every key returned 429. Wait a minute, or add another key on a different
+project to widen the pool. A 401 (bad key) fails fast instead — check that key.
+</details>
+
+<details>
+<summary><strong>Mic doesn't start / "Mic seems blocked"</strong></summary>
+
+Another app is holding the microphone (calls, recorders, assistants). Close it
+and tap mic again. If permission was denied, re-grant it — a pending tap
+auto-resumes after grant.
+</details>
+
+<details>
+<summary><strong>"No speech detected" / empty transcript</strong></summary>
+
+Speak closer/louder, reduce background noise, and check the waveform moves
+while recording. Very short taps (< ~0.5 s) may capture no audio.
+</details>
+
+<details>
+<summary><strong>Keyboard doesn't appear in the list</strong></summary>
+
+Open the Voice IME app → **Enable keyboard** → toggle it on in system settings
+→ switch via the 🌐 key or system keyboard switcher.
+</details>
+
+<details>
+<summary><strong>Transcript went to the wrong field</strong></summary>
+
+The IME snapshots the latest clip on every input start — open
+clipboard-history from the badge to re-paste any recent transcript.
+</details>
+
+---
+
+## 🤝 Contributing
+
+Issues and PRs are welcome — this is a small, focused codebase and it shows.
+
+```bash
+# Standard loop
+./gradlew testDebugUnitTest   # must stay green
+./gradlew assembleDebug       # must build
+```
+
+- **Issues:** include device, Android version, app version (`1.4.1`), model,
+  and the exact toast/error string.
+- **PRs:** keep the voice-only concept; match M3 dynamic-color tokens; add or
+  update unit tests for logic changes; keep functions focused and state explicit.
+- **No-goes:** new permissions, disk persistence of audio, unencrypted key
+  storage, verbatim copies from other keyboards.
+
+---
+
+## 🙏 Acknowledgments
+
+IME and audio patterns studied from
+[futo-org/android-keyboard](https://github.com/futo-org/android-keyboard)
+(FUTO Source First License 1.1-kb) — all code reimplemented, no verbatim copy.
+
+Transcription by the [Gemini API](https://ai.google.dev) (`generateContent`
+with inline audio). Built with Material 3, OkHttp, and Kotlin Coroutines.
