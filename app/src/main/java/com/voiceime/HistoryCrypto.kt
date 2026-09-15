@@ -48,12 +48,16 @@ object NoOpHistoryCrypto : HistoryCrypto {
  * not exist under `RobolectricTestRunner` (`KeyStoreException:
  * AndroidKeyStore not found`, upstream robolectric/robolectric#1518 still
  * open), so `MasterKey` construction always fails there. In that case — and
- * only when the failure is a missing keystore provider — this class falls
- * back to a process-cached software Tink keyset driving the SAME streaming
- * primitive (`AES256_GCM_HKDF_4KB`) with the SAME filename AAD convention as
- * [EncryptedFile]. The catch is deliberately narrow (`KeyStoreException` /
- * `NoSuchAlgorithmException` / `NoSuchProviderException`): any other failure
- * (locked keystore, corrupted keyset) still throws, and callers stay
+ * only when the AndroidKeyStore provider is ABSENT — this class falls back to
+ * a process-cached software Tink keyset driving the SAME streaming primitive
+ * (`AES256_GCM_HKDF_4KB`) with the SAME filename AAD convention as
+ * [EncryptedFile]. The gate is provider absence first
+ * (`Security.getProvider("AndroidKeyStore") == null`), with the
+ * missing-provider exception types as corroboration: on-device keystore
+ * failures (locked/corrupted keystore, post-lockscreen-change) also surface
+ * as `KeyStoreException`, and silently downgrading those to a process-local
+ * key would mean deterministic data loss plus a masked failure — so any
+ * keystore failure while the provider IS present rethrows, and callers stay
  * fail-closed. On a real device the AndroidKeyStore provider is always
  * present, so production traffic never touches the software path; the
  * software key is process-local only and never persisted, which is exactly
@@ -72,6 +76,30 @@ class EncryptedFileHistoryCrypto(
         const val SCRATCH_NAME = "clipboard_history.crypto.tmp"
 
         private val CRYPTO_LOCK = Any()
+
+        /**
+         * Software-fallback gate. Primary condition: the AndroidKeyStore
+         * provider must be ABSENT (`Security.getProvider` returns null), which
+         * is the Robolectric/JVM case. The exception chain is only
+         * corroborating evidence — a missing-provider failure type. Any
+         * keystore failure while the provider IS present (locked/corrupted
+         * keystore on-device) rethrows: callers stay fail-closed instead of
+         * silently downgrading to a process-local key and losing data.
+         */
+        internal fun isFallbackAllowed(e: Throwable): Boolean {
+            if (java.security.Security.getProvider("AndroidKeyStore") != null) return false
+            var cause: Throwable? = e
+            while (cause != null) {
+                if (cause is java.security.KeyStoreException ||
+                    cause is java.security.NoSuchAlgorithmException ||
+                    cause is java.security.NoSuchProviderException
+                ) {
+                    return true
+                }
+                cause = cause.cause
+            }
+            return false
+        }
     }
 
     private val appContext = context.applicationContext
@@ -98,24 +126,11 @@ class EncryptedFileHistoryCrypto(
                 }
             }
         } catch (e: Exception) {
-            if (!isMissingKeystoreProvider(e)) throw e
+            if (!isFallbackAllowed(e)) throw e
             SoftwareTinkSealer()
         }
     }
 
-    private fun isMissingKeystoreProvider(e: Throwable): Boolean {
-        var cause: Throwable? = e
-        while (cause != null) {
-            if (cause is java.security.KeyStoreException ||
-                cause is java.security.NoSuchAlgorithmException ||
-                cause is java.security.NoSuchProviderException
-            ) {
-                return true
-            }
-            cause = cause.cause
-        }
-        return false
-    }
 
     override fun seal(plain: ByteArray): ByteArray {
         synchronized(CRYPTO_LOCK) {

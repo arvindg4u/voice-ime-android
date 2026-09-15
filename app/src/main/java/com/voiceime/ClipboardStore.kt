@@ -38,6 +38,8 @@ class ClipboardStore private constructor(
     companion object {
         const val FILE_NAME = "clipboard_history.json"
 
+        private const val TAG = "ClipboardStore"
+
         /** Production entry point. */
         fun forContext(context: Context): ClipboardStore {
             val dir = context.noBackupFilesDir
@@ -163,6 +165,7 @@ class ClipboardStore private constructor(
         val payload = try {
             crypto.seal(array.toString().toByteArray(Charsets.UTF_8))
         } catch (e: Exception) {
+            if (BuildConfig.DEBUG) android.util.Log.w(TAG, "history seal failed; write skipped")
             return
         }
         try {
@@ -175,6 +178,13 @@ class ClipboardStore private constructor(
                 // Rename failed (e.g. cross-volume): fall back to direct write.
                 swap.copyTo(primary, overwrite = true)
                 swap.delete()
+            }
+            // Post-write cleanup only: the rotation above archived the
+            // pre-write primary as .bak, so a legacy-plaintext primary would
+            // survive one more cycle as plaintext .bak. A sealed payload
+            // fails neither parse shape nor open; legacy plaintext fails open.
+            if (backup.exists() && !isSealed(backup.readBytes())) {
+                backup.delete()
             }
         } catch (e: Exception) {
             try {
@@ -236,6 +246,21 @@ class ClipboardStore private constructor(
         }
     }
 
+    /**
+     * Best-effort legacy check for post-write .bak cleanup: `crypto.open`
+     * succeeds on sealed bytes and throws on legacy plaintext. (Sealed bytes
+     * that fail to open — e.g. a key mismatch — read as garbage that parses
+     * to null on the legacy path too, so deletion stays safe in that case.)
+     */
+    private fun isSealed(raw: ByteArray): Boolean {
+        return try {
+            crypto.open(raw)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private fun deleteFiles() {
         try {
             primary.delete()
@@ -247,6 +272,13 @@ class ClipboardStore private constructor(
         }
         try {
             if (swap.exists()) swap.delete()
+        } catch (e: Exception) {
+        }
+        // Fixed crypto scratch file: a crash mid-seal/open or disable could
+        // leave residue outside ClipboardStore's own swap file.
+        try {
+            val scratch = File(dir, EncryptedFileHistoryCrypto.SCRATCH_NAME)
+            if (scratch.exists()) scratch.delete()
         } catch (e: Exception) {
         }
     }
