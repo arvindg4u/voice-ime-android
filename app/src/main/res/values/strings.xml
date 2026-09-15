@@ -46,6 +46,7 @@
     <string name="settings_saved">Settings saved</string>
     <string name="settings_saved_test_hint">Settings saved — test from keyboard</string>
     <string name="settings_missing_key">Enter API key and base URL first</string>
+    <string name="settings_https_required">Base URL must use https — reset to default</string>
     <string name="mic_needed">Microphone needed for voice input</string>
     <string name="settings_section_connection">Connection</string>
     <string name="settings_section_personalize">Personalize</string>

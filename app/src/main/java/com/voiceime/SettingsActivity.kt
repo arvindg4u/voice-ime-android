@@ -75,7 +75,13 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun save() {
-        settings.baseUrl = baseUrlField.text?.toString().orEmpty()
+        val typed = baseUrlField.text?.toString().orEmpty()
+        settings.baseUrl = typed
+        if (typed.isNotBlank() && settings.baseUrl == SettingsStore.DEFAULT_BASE_URL &&
+            typed.trim() != SettingsStore.DEFAULT_BASE_URL
+        ) {
+            Toast.makeText(this, R.string.settings_https_required, Toast.LENGTH_LONG).show()
+        }
         settings.apiKeys = apiKeyField.text?.toString().orEmpty()
             .split("\n").map { line -> line.trim() }.filter { line -> line.isNotEmpty() }
         settings.model = modelField.text?.toString().orEmpty()

@@ -21,6 +21,20 @@ class SettingsStore(context: Context) {
         private const val KEY_MODEL = "model"
         private const val KEY_CUSTOM_PROMPT = "custom_prompt"
         private const val KEY_SMART_MODE = "smart_mode"
+
+        /** Fail-closed: anything that is not an https URL resets to default. */
+        fun normalize(raw: String): String {
+            var url = raw.trim()
+            if (url.isEmpty()) return DEFAULT_BASE_URL
+            url = url.trimEnd('/')
+            if (url.endsWith("/chat/completions")) {
+                url = url.removeSuffix("/chat/completions").trimEnd('/')
+            }
+            if (url.isEmpty()) return DEFAULT_BASE_URL
+            val scheme = url.substringBefore("://", "").lowercase()
+            if (scheme != "https") return DEFAULT_BASE_URL
+            return url
+        }
     }
 
     private val prefs: SharedPreferences = EncryptedSharedPreferences.create(
@@ -79,14 +93,5 @@ class SettingsStore(context: Context) {
         }
 
     /** Trim trailing slashes and legacy "/chat/completions"; empty falls back to default. */
-    fun normalizeBaseUrl(raw: String): String {
-        var url = raw.trim()
-        if (url.isEmpty()) return DEFAULT_BASE_URL
-        url = url.trimEnd('/')
-        if (url.endsWith("/chat/completions")) {
-            url = url.removeSuffix("/chat/completions").trimEnd('/')
-        }
-        if (url.isEmpty()) return DEFAULT_BASE_URL
-        return url
-    }
+    fun normalizeBaseUrl(raw: String): String = normalize(raw)
 }
