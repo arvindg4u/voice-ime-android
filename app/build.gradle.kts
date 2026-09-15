@@ -66,6 +66,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // Direct pin of the exact tink-android version security-crypto:1.1.0-alpha06
+    // already resolves (runtime scope there, so not on our compile classpath).
+    // Needed to compile the fenced JVM-test fallback in HistoryCrypto.kt.
+    implementation("com.google.crypto.tink:tink-android:1.8.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20231013")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")

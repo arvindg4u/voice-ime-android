@@ -23,18 +23,30 @@ import org.json.JSONObject
  * All IO runs on the caller's thread; callers must use Dispatchers.IO. The
  * in-memory snapshot is a CopyOnWriteArrayList so UI threads read without
  * blocking.
+ *
+ * Payloads are sealed through [HistoryCrypto] before hitting disk:
+ * [forContext] wires the [EncryptedFile]-backed impl (AES256-GCM); the
+ * [forDirectory] seam defaults to [NoOpHistoryCrypto] for tests. Reads try
+ * `open` first and fall back to legacy plaintext, so files written before
+ * encryption migrate transparently on the next persist.
  */
-class ClipboardStore private constructor(private val dir: File) {
+class ClipboardStore private constructor(
+    private val dir: File,
+    private val crypto: HistoryCrypto = NoOpHistoryCrypto,
+) {
 
     companion object {
         const val FILE_NAME = "clipboard_history.json"
 
         /** Production entry point. */
-        fun forContext(context: Context): ClipboardStore =
-            ClipboardStore(context.noBackupFilesDir)
+        fun forContext(context: Context): ClipboardStore {
+            val dir = context.noBackupFilesDir
+            return ClipboardStore(dir, EncryptedFileHistoryCrypto(context, dir))
+        }
 
         /** Test seam: any writable dir (e.g. a JUnit temp folder). */
-        fun forDirectory(dir: File): ClipboardStore = ClipboardStore(dir)
+        fun forDirectory(dir: File, crypto: HistoryCrypto = NoOpHistoryCrypto): ClipboardStore =
+            ClipboardStore(dir, crypto)
     }
 
     private val primary = File(dir, FILE_NAME)
@@ -140,7 +152,19 @@ class ClipboardStore private constructor(private val dir: File) {
                     .put("mimeType", entry.mimeType),
             )
         }
-        val payload = array.toString().toByteArray(Charsets.UTF_8)
+        // Seal BEFORE the swap-write: EncryptedFile binds its tag to the
+        // file name (AAD), so encryption happens through a fixed scratch
+        // file inside EncryptedFileHistoryCrypto while THIS swap+rename
+        // keeps crash safety for the resulting opaque ciphertext bytes.
+        // Fail-closed: a seal failure writes nothing. Persisting the plaintext
+        // instead would silently defeat Task 5 encryption, and dropping the
+        // in-memory snapshot would destroy data the next successful persist
+        // could still save — so keep memory intact and skip this write.
+        val payload = try {
+            crypto.seal(array.toString().toByteArray(Charsets.UTF_8))
+        } catch (e: Exception) {
+            return
+        }
         try {
             // Swap-write then atomic rename; keep last-good .bak first.
             if (primary.exists()) {
@@ -162,15 +186,28 @@ class ClipboardStore private constructor(private val dir: File) {
 
     private fun readFile(): List<ClipboardEntry>? {
         val parsed = try {
-            if (!primary.exists()) null else parse(primary.readText(Charsets.UTF_8))
+            if (!primary.exists()) null else parse(decode(primary.readBytes()))
         } catch (e: Exception) {
             null
         }
         if (parsed != null) return parsed
         return try {
-            if (!backup.exists()) null else parse(backup.readText(Charsets.UTF_8))
+            if (!backup.exists()) null else parse(decode(backup.readBytes()))
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /**
+     * Tries `crypto.open` first; falls back to legacy plaintext. Unsealed
+     * input is left intact for backup files only when it parses — legacy
+     * payloads migrate to encrypted form on the next persist.
+     */
+    private fun decode(raw: ByteArray): String {
+        return try {
+            crypto.open(raw).toString(Charsets.UTF_8)
+        } catch (e: Exception) {
+            raw.toString(Charsets.UTF_8)
         }
     }
 
