@@ -46,6 +46,12 @@ class VoiceImeService : InputMethodService() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    /**
+     * Discard-only scope: deliberately independent of serviceScope. onDestroy
+     * calls cancelWork() then serviceScope.cancel() — a discard launched in
+     * serviceScope would die immediately; here it always runs to completion.
+     */
+    private val discardScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     companion object {
 
@@ -928,8 +934,21 @@ class VoiceImeService : InputMethodService() {
         }
         liveFinalParts.setLength(0)
         liveLastInterim = ""
-        recorder?.discard()
+        // Null synchronously, discard off Main: discard() joins the capture
+        // thread (bounded 2 s then unbounded on a stuck mic read) and every
+        // caller runs on Main. Runs in discardScope — NOT serviceScope, which
+        // onDestroy cancels immediately after this returns.
+        val rec = recorder
         recorder = null
+        if (rec != null) {
+            discardScope.launch {
+                try {
+                    rec.discard()
+                } catch (e: Exception) {
+                    // Best-effort teardown; nothing to report to the user.
+                }
+            }
+        }
         lastWav = null
         if (state == State.RECORDING || state == State.UPLOADING) {
             state = State.IDLE

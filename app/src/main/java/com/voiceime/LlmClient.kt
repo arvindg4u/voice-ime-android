@@ -76,9 +76,11 @@ class LlmClient {
         if (isInteractionsModel(model)) {
             return interactionsTranscribe(wav, keys, baseUrl, model, startIndex, customPrompt, smartMode)
         }
-        val audioB64 = java.util.Base64.getEncoder().encodeToString(wav)
-
-        val body = buildGeminiRequestJson(audioB64, customPrompt)
+        // CPU on IO: multi-MB Base64 + JSON for long takes must not run on Main.
+        val (audioB64, body) = withContext(Dispatchers.IO) {
+            val b64 = java.util.Base64.getEncoder().encodeToString(wav)
+            b64 to buildGeminiRequestJson(b64, customPrompt)
+        }
         val url = geminiUrl(baseUrl, model)
         val host = try { java.net.URL(baseUrl).host } catch (e: Exception) { baseUrl }
         debugLog(
@@ -543,7 +545,8 @@ class LlmClient {
         startIndex: Int,
         smartMode: Boolean = false,
     ): Pair<String, Int> {
-        val pcm = wavToMono16kPcm(wav)
+        // CPU on IO: WAV header strip + copy of the full PCM must not run on Main.
+        val pcm = withContext(Dispatchers.IO) { wavToMono16kPcm(wav) }
         val host = liveHost(baseUrl)
         debugLog(
             "live",
@@ -586,8 +589,11 @@ class LlmClient {
         customPrompt: String,
         smartMode: Boolean = false,
     ): Pair<String, Int> {
-        val audioB64 = java.util.Base64.getEncoder().encodeToString(wav)
-        val body = buildInteractionsRequestJson(audioB64, model, customPrompt, smartMode)
+        // CPU on IO: multi-MB Base64 + JSON for long takes must not run on Main.
+        val (audioB64, body) = withContext(Dispatchers.IO) {
+            val b64 = java.util.Base64.getEncoder().encodeToString(wav)
+            b64 to buildInteractionsRequestJson(b64, model, customPrompt, smartMode)
+        }
         val url = interactionsUrl(baseUrl)
         val host = try { java.net.URL(baseUrl).host } catch (e: Exception) { baseUrl }
         debugLog(
@@ -631,7 +637,12 @@ class LlmClient {
         inFlightRaw = raw
         connectLiveSocket(raw)?.let { return@coroutineScope it }
         try {
-            sendLiveAudio(raw, pcm, model, smartMode, deferred)
+            // Chunk loop (per-chunk Base64 + JSON) on IO, never Main.
+            withContext(Dispatchers.IO) {
+                sendLiveAudio(raw, pcm, model, smartMode, deferred)
+            }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             deferred.complete(LiveOutcome.Fail("Network error — check connection", e))
         }
