@@ -108,7 +108,7 @@ class LlmClient {
             } finally {
                 if (inFlight === call) inFlight = null
             }
-            debugLog("transcribe", "HTTP $code key=$idx payload=${payload.take(2000)}")
+            debugLog("transcribe", "HTTP $code key=$idx bytes=${payload.length}")
             if (code == 429) {
                 if (i == keys.lastIndex) {
                     throw TranscribeException("Rate limited on all keys — retry later")
@@ -254,12 +254,10 @@ class LlmClient {
         }
 
         private fun onSocketText(text: String) {
-            // Full-reply forensics: server replies carry no secrets
-            // (transcripts only), so log them whole while the
-            // transcribe-live path is silent in production.
+            // Length/shape only: server replies carry transcripts, which never hit logcat.
             if (shapeLogged < 6) {
                 shapeLogged++
-                log("live-rx", "msg#$shapeLogged len=" + text.length + " " + text.take(600))
+                log("live-rx", "msg#$shapeLogged len=" + text.length)
             }
             logShapeOnce(text)
             if (!setupComplete && isLiveSetupComplete(text)) {
@@ -479,9 +477,9 @@ class LlmClient {
         }
     }
 
-    /** Diagnostic log only: never pass apiKey or audio data here. */
+    /** Diagnostic log only: never pass apiKey or audio data here. Release builds stay silent. */
     private fun debugLog(tag: String, msg: String) {
-        android.util.Log.d("VoiceIme", "$tag: $msg")
+        if (BuildConfig.DEBUG) android.util.Log.d("VoiceIme", "$tag: $msg")
     }
 
     /**
@@ -578,7 +576,7 @@ class LlmClient {
             } finally {
                 if (inFlight === call) inFlight = null
             }
-            debugLog("interactions", "HTTP $code key=$idx payload=${payload.take(2000)}")
+            debugLog("interactions", "HTTP $code key=$idx bytes=${payload.length}")
             if (code == 429) {
                 if (i == keys.lastIndex) {
                     throw TranscribeException("Rate limited on all keys — retry later")
