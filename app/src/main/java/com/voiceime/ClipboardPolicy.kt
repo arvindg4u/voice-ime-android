@@ -30,6 +30,12 @@ object ClipboardPolicy {
     /** Per-item text cap in the history store; oversized clips are dropped. */
     const val MAX_ITEM_CHARS = 8 * 1024
 
+    /** Commit-text cap for editors; overlong transcripts truncate with a user note. */
+    const val MAX_COMMIT_CHARS = 32 * 1024
+
+    fun truncateCommit(text: String): String =
+        if (text.length > MAX_COMMIT_CHARS) text.take(MAX_COMMIT_CHARS) else text
+
     /** Preview length shown in the IME strip / manager list. */
     const val PREVIEW_CHARS = 64
 

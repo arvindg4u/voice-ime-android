@@ -74,4 +74,5 @@
     <string name="clipboard_pinned">Pinned</string>
     <string name="clipboard_unpinned">Unpinned</string>
     <string name="clipboard_too_large">Clip too large — not saved</string>
+    <string name="ime_commit_truncated">Long transcript truncated to 32k characters</string>
 </resources>

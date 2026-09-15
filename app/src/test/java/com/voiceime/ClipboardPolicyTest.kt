@@ -163,4 +163,24 @@ class ClipboardPolicyTest {
         assertFalse(preview.contains("s3cret"))
         assertTrue(preview.isNotEmpty())
     }
+
+    @Test
+    fun `truncateCommit passes through at and below cap`() {
+        val exact = "x".repeat(ClipboardPolicy.MAX_COMMIT_CHARS)
+        assertEquals(exact, ClipboardPolicy.truncateCommit(exact))
+        assertEquals("hi", ClipboardPolicy.truncateCommit("hi"))
+    }
+
+    @Test
+    fun `truncateCommit truncates above cap`() {
+        val big = "y".repeat(ClipboardPolicy.MAX_COMMIT_CHARS + 500)
+        val out = ClipboardPolicy.truncateCommit(big)
+        assertEquals(ClipboardPolicy.MAX_COMMIT_CHARS, out.length)
+        assertEquals("y".repeat(ClipboardPolicy.MAX_COMMIT_CHARS), out)
+    }
+
+    @Test
+    fun `max commit chars is 32k`() {
+        assertEquals(32 * 1024, ClipboardPolicy.MAX_COMMIT_CHARS)
+    }
 }

@@ -514,6 +514,9 @@ class VoiceImeService : InputMethodService() {
                         (state == State.RECORDING || state == State.UPLOADING)
                     ) {
                         liveFinalParts.append(text)
+                        if (liveFinalParts.length > ClipboardPolicy.MAX_COMMIT_CHARS) {
+                            liveFinalParts.delete(0, liveFinalParts.length - ClipboardPolicy.MAX_COMMIT_CHARS)
+                        }
                         statusText?.text = liveFinalParts.toString()
                     }
                 }
@@ -779,14 +782,15 @@ class VoiceImeService : InputMethodService() {
             return
         }
         lastWav = null
-        val saveJob = maybeSaveClip(text)
+        val capped = ClipboardPolicy.truncateCommit(text)
+        val saveJob = maybeSaveClip(capped)
         // Clipboard first so the text survives even if commit fails.
         try {
             val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText("voice-ime", text)
+            val clip = ClipData.newPlainText("voice-ime", capped)
             if (passwordField) markClipSensitive(clip.description)
             cm.setPrimaryClip(clip)
-            lastClipFingerprint = ClipboardPolicy.clipFingerprint("voice-ime", text, "text/plain")
+            lastClipFingerprint = ClipboardPolicy.clipFingerprint("voice-ime", capped, "text/plain")
         } catch (e: Exception) {
             // Clipboard unavailable; still try commitText.
         }
@@ -796,13 +800,16 @@ class VoiceImeService : InputMethodService() {
                 ic.finishComposingText()
                 ic.beginBatchEdit()
                 try {
-                    ic.commitText(text, 1)
+                    ic.commitText(capped, 1)
                 } finally {
                     ic.endBatchEdit()
                 }
             } catch (e: Exception) {
                 // Fall through to clipboard-only path with toast.
             }
+        }
+        if (capped.length != text.length) {
+            Toast.makeText(this, R.string.ime_commit_truncated, Toast.LENGTH_LONG).show()
         }
         state = State.IDLE
         renderState()
@@ -1050,12 +1057,13 @@ class VoiceImeService : InputMethodService() {
 
     private fun commitClipEntry(entry: ClipboardEntry) {
         if (entry.text.isBlank()) return
+        val capped = ClipboardPolicy.truncateCommit(entry.text)
         try {
             val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = ClipData.newPlainText("voice-ime", entry.text)
+            val clip = ClipData.newPlainText("voice-ime", capped)
             if (passwordField || entry.isSensitive) markClipSensitive(clip.description)
             cm.setPrimaryClip(clip)
-            lastClipFingerprint = ClipboardPolicy.clipFingerprint("voice-ime", entry.text, "text/plain")
+            lastClipFingerprint = ClipboardPolicy.clipFingerprint("voice-ime", capped, "text/plain")
         } catch (e: Exception) {
             return
         }
@@ -1064,7 +1072,7 @@ class VoiceImeService : InputMethodService() {
             ic.finishComposingText()
             ic.beginBatchEdit()
             try {
-                ic.commitText(entry.text, 1)
+                ic.commitText(capped, 1)
             } finally {
                 ic.endBatchEdit()
             }
