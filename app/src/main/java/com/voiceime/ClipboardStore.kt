@@ -40,6 +40,14 @@ class ClipboardStore private constructor(
 
         private const val TAG = "ClipboardStore"
 
+        /**
+         * Process-wide guard for compound in-memory replace + file read-modify-write.
+         * Per-instance locking is insufficient: the activity and the service each own
+         * an instance over the same directory, so last-writer-wins could resurrect a
+         * deleted entry or drop the other writer's entry.
+         */
+        private val STORE_LOCK = Any()
+
         /** Production entry point. */
         fun forContext(context: Context): ClipboardStore {
             val dir = context.noBackupFilesDir
@@ -66,31 +74,31 @@ class ClipboardStore private constructor(
     var enabled: Boolean = false
 
     /** Immutable copy of the current in-memory snapshot (newest first). */
-    fun snapshot(): List<ClipboardEntry> = entries.toList()
+    fun snapshot(): List<ClipboardEntry> = synchronized(STORE_LOCK) { entries.toList() }
 
     /** Loads primary (falls back to .bak), prunes, and refreshes the snapshot. */
-    fun load(nowMs: Long = System.currentTimeMillis()): List<ClipboardEntry> {
+    fun load(nowMs: Long = System.currentTimeMillis()): List<ClipboardEntry> = synchronized(STORE_LOCK) {
         val loaded = readFile() ?: emptyList()
         val pruned = ClipboardPolicy.prune(loaded, nowMs, maxUnpinned, maxPinned, ttlMs)
         entries.clear()
         entries.addAll(pruned)
-        return snapshot()
+        return@synchronized snapshot()
     }
 
-    fun add(text: String, nowMs: Long = System.currentTimeMillis(), isSensitive: Boolean = false): List<ClipboardEntry> {
-        if (!enabled) return snapshot()
-        if (!ClipboardPolicy.shouldCapture(text)) return snapshot()
+    fun add(text: String, nowMs: Long = System.currentTimeMillis(), isSensitive: Boolean = false): List<ClipboardEntry> = synchronized(STORE_LOCK) {
+        if (!enabled) return@synchronized snapshot()
+        if (!ClipboardPolicy.shouldCapture(text)) return@synchronized snapshot()
         val updated = ClipboardPolicy.addClip(
             entries.toList(), text, nowMs, maxUnpinned, maxPinned, ttlMs, isSensitive,
         )
         entries.clear()
         entries.addAll(updated)
         persist()
-        return snapshot()
+        return@synchronized snapshot()
     }
 
-    fun togglePin(entryId: String, nowMs: Long = System.currentTimeMillis()): List<ClipboardEntry> {
-        val target = entries.find { it.id == entryId } ?: return snapshot()
+    fun togglePin(entryId: String, nowMs: Long = System.currentTimeMillis()): List<ClipboardEntry> = synchronized(STORE_LOCK) {
+        val target = entries.find { it.id == entryId } ?: return@synchronized snapshot()
         val updated = if (target.isPinned) {
             ClipboardPolicy.unpin(entries.toList(), entryId, nowMs)
         } else {
@@ -110,28 +118,28 @@ class ClipboardStore private constructor(
         entries.clear()
         entries.addAll(updated)
         persist()
-        return snapshot()
+        return@synchronized snapshot()
     }
 
-    fun deleteAt(entryId: String): List<ClipboardEntry> {
+    fun deleteAt(entryId: String): List<ClipboardEntry> = synchronized(STORE_LOCK) {
         if (entries.removeIf { it.id == entryId }) persist()
-        return snapshot()
+        return@synchronized snapshot()
     }
 
     /** Removes every unpinned entry; returns the surviving snapshot. */
-    fun clearUnpinned(): List<ClipboardEntry> {
+    fun clearUnpinned(): List<ClipboardEntry> = synchronized(STORE_LOCK) {
         if (entries.removeIf { !it.isPinned }) persist()
-        return snapshot()
+        return@synchronized snapshot()
     }
 
     /** Removes everything and deletes the store files. */
-    fun clearAll() {
+    fun clearAll() = synchronized(STORE_LOCK) {
         entries.clear()
         deleteFiles()
     }
 
     /** Disabling history deletes the store file + .bak. */
-    fun setEnabled(value: Boolean, nowMs: Long = System.currentTimeMillis()) {
+    fun setEnabled(value: Boolean, nowMs: Long = System.currentTimeMillis()) = synchronized(STORE_LOCK) {
         enabled = value
         if (!value) {
             entries.clear()

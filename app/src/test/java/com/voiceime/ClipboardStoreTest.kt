@@ -158,4 +158,46 @@ class ClipboardStoreTest {
         // FIFO: oldest pinned ("a") evicted.
         assertEquals(setOf("b", "c"), pinned.map { it.text }.toSet())
     }
+
+    @Test
+    fun `concurrent adds never lose entries`() {
+        val dir = temp.newFolder()
+        val s = ClipboardStore.forDirectory(dir).apply {
+            enabled = true
+            ttlMs = 0L
+            maxUnpinned = 50
+        }
+        val threads = (0 until 4).map { t ->
+            Thread {
+                for (i in 0 until 10) s.add("t$t-i$i", nowMs = 1_000L + t * 100 + i)
+            }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join(30_000) }
+        val texts = s.snapshot().map { it.text }.toSet()
+        for (t in 0 until 4) for (i in 0 until 10) {
+            assertTrue("missing t$t-i$i", texts.contains("t$t-i$i"))
+        }
+    }
+
+    @Test
+    fun `snapshot never observes the empty middle state`() {
+        val s = store().apply { maxUnpinned = 500 }
+        s.add("seed", nowMs = 1_000L)
+        val empties = java.util.concurrent.atomic.AtomicInteger(0)
+        val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+        val writer = Thread {
+            var n = 0
+            while (!stop.get()) { s.add("w${n++}", nowMs = 2_000L + n); if (n > 200) n = 0 }
+        }
+        val readers = (0 until 3).map {
+            Thread {
+                while (!stop.get()) { if (s.snapshot().isEmpty()) empties.incrementAndGet() }
+            }
+        }
+        writer.start(); readers.forEach { it.start() }
+        Thread.sleep(2_000)
+        stop.set(true); writer.join(30_000); readers.forEach { it.join(30_000) }
+        assertEquals(0, empties.get())
+    }
 }
