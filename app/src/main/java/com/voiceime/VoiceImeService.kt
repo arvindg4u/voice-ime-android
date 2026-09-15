@@ -514,9 +514,6 @@ class VoiceImeService : InputMethodService() {
                         (state == State.RECORDING || state == State.UPLOADING)
                     ) {
                         liveFinalParts.append(text)
-                        if (liveFinalParts.length > ClipboardPolicy.MAX_COMMIT_CHARS) {
-                            liveFinalParts.delete(0, liveFinalParts.length - ClipboardPolicy.MAX_COMMIT_CHARS)
-                        }
                         statusText?.text = liveFinalParts.toString()
                     }
                 }
