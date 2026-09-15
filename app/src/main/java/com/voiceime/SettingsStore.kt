@@ -92,6 +92,6 @@ class SettingsStore(context: Context) {
             prefs.edit().putBoolean(KEY_SMART_MODE, value).apply()
         }
 
-    /** Trim trailing slashes and legacy "/chat/completions"; empty falls back to default. */
+    /** Delegates to [normalize]: trims, strips legacy "/chat/completions", and fail-closed resets anything non-https to default. */
     fun normalizeBaseUrl(raw: String): String = normalize(raw)
 }

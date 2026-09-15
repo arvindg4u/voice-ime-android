@@ -77,11 +77,9 @@ class SettingsActivity : AppCompatActivity() {
     private fun save() {
         val typed = baseUrlField.text?.toString().orEmpty()
         settings.baseUrl = typed
-        if (typed.isNotBlank() && settings.baseUrl == SettingsStore.DEFAULT_BASE_URL &&
-            typed.trim() != SettingsStore.DEFAULT_BASE_URL
-        ) {
-            Toast.makeText(this, R.string.settings_https_required, Toast.LENGTH_LONG).show()
-        }
+        val httpsReset = typed.isNotBlank() &&
+            typed.trim().substringBefore("://", "").lowercase() != "https" &&
+            settings.baseUrl == SettingsStore.DEFAULT_BASE_URL
         settings.apiKeys = apiKeyField.text?.toString().orEmpty()
             .split("\n").map { line -> line.trim() }.filter { line -> line.isNotEmpty() }
         settings.model = modelField.text?.toString().orEmpty()
@@ -89,7 +87,11 @@ class SettingsActivity : AppCompatActivity() {
         baseUrlField.setText(settings.baseUrl)
         modelField.setText(settings.model)
         customPromptField.setText(settings.customPrompt)
-        Toast.makeText(this, R.string.settings_saved, Toast.LENGTH_SHORT).show()
+        if (httpsReset) {
+            Toast.makeText(this, R.string.settings_https_required, Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(this, R.string.settings_saved, Toast.LENGTH_SHORT).show()
+        }
     }
 
     /**
