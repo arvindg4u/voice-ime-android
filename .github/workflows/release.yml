@@ -22,7 +22,11 @@ jobs:
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        # Same fix as android.yml: setup-android@v3's default `tools`
+        # package is gone upstream. Install the exact packages instead.
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Restore release keystore
         env:

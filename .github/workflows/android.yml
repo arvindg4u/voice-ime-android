@@ -18,7 +18,13 @@ jobs:
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        # android-actions/setup-android@v3 broke 2026-09-15: its default
+        # `tools` package no longer exists upstream ("Failed to find package
+        # 'tools'"). Install the exact packages compileSdk 34 needs instead;
+        # ubuntu-latest images already ship sdkmanager on PATH.
+        run: |
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Run unit tests
         run: |
