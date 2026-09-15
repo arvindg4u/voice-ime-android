@@ -71,9 +71,12 @@ class ClipboardHistoryActivity : AppCompatActivity() {
         val enableSwitch = findViewById<MaterialSwitch>(R.id.clipEnable)
         enableSwitch.isChecked = store.enabled
         enableSwitch.setOnCheckedChangeListener { _, checked ->
-            setHistoryEnabled(checked)
             scope.launch {
-                withContext(Dispatchers.IO) { store.setEnabled(checked) }
+                withContext(Dispatchers.IO) {
+                    setHistoryEnabled(checked)
+                    // Sync this screen's in-memory snapshot (helper works on its own instance).
+                    store.setEnabled(checked)
+                }
                 adapter.setEntries(store.snapshot())
                 updateEmptyState()
             }
@@ -162,6 +165,17 @@ class ClipboardHistoryActivity : AppCompatActivity() {
 
         fun isEnabled(context: Context): Boolean =
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
+
+        /**
+         * Single toggle both screens route through: flips the pref and applies
+         * it to the store (disabling deletes history files). Synchronous file
+         * IO — callers must be off the main thread.
+         */
+        fun setClipboardEnabled(context: Context, checked: Boolean) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_ENABLED, checked).apply()
+            ClipboardStore.forContext(context).setEnabled(checked)
+        }
 
         fun maxCount(context: Context): Int =
             ClipboardPolicy.clampMaxUnpinned(

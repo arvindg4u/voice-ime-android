@@ -68,10 +68,11 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun setClipHistoryEnabled(checked: Boolean) {
-        getSharedPreferences(
-            ClipboardHistoryActivity.PREFS,
-            android.content.Context.MODE_PRIVATE,
-        ).edit().putBoolean(ClipboardHistoryActivity.KEY_ENABLED, checked).apply()
+        lifecycleScope.launch {
+            withContext(Dispatchers.IO) {
+                ClipboardHistoryActivity.setClipboardEnabled(this@SettingsActivity, checked)
+            }
+        }
     }
 
     private fun save() {
