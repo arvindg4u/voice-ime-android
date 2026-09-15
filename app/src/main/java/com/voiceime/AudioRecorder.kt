@@ -33,6 +33,14 @@ class AudioRecorder(
         const val SAMPLE_RATE = 16000
         const val MAX_DURATION_MS = 300_000L
         const val SILENCE_PEAK_THRESHOLD = 0.008f
+        /** Grace period of effectively silent capture before the mic may be blocked. */
+        const val BLOCKED_GRACE_MS = 2_000L
+        /** Capture chunk size in bytes (100 ms at 16 kHz 16-bit mono). */
+        const val CHUNK_BYTES = 3_200
+        /** RMS level below which a chunk counts as noise-free. */
+        const val NOISE_FLOOR = 0.0001f
+        /** Bounded join for the capture thread in stop()/discard(). */
+        const val STOP_JOIN_MS = 2_000L
 
         /** Pure helper: true when peak is below the silence threshold. */
         fun isSilent(peak: Float, threshold: Float = SILENCE_PEAK_THRESHOLD): Boolean =
@@ -115,6 +123,7 @@ class AudioRecorder(
     private val recording = AtomicBoolean(false)
 
     private var buffer: ByteArrayOutputStream? = null
+    private val bufferLock = Any()
 
     @Volatile
     private var _peakLevel = 0f
@@ -129,7 +138,7 @@ class AudioRecorder(
 
     /** True when ~2 s of capture show effectively no signal — mic may be blocked. */
     fun isMicMaybeBlocked(): Boolean =
-        !anyNoiseAtAll && System.currentTimeMillis() - captureStartMs > 2000
+        !anyNoiseAtAll && System.currentTimeMillis() - captureStartMs > BLOCKED_GRACE_MS
 
     private fun audioManager(): AudioManager? {
         val svc = context?.getSystemService(Context.AUDIO_SERVICE)
@@ -190,6 +199,31 @@ class AudioRecorder(
     fun start() {
         if (recording.get()) return
         routeToBuiltinMic()
+        val record = createRecord()
+        requestExclusiveFocus()
+        buffer = ByteArrayOutputStream()
+        _peakLevel = 0f
+        anyNoiseAtAll = false
+        captureStartMs = System.currentTimeMillis()
+        record.startRecording()
+        if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            record.release()
+            releaseAudioRoute()
+            throw IllegalStateException("Mic unavailable")
+        }
+        recorder = record
+        recording.set(true)
+        val thread = Thread({ captureLoop(record) }, "VoiceImeRecord")
+        recordingThread = thread
+        thread.start()
+    }
+
+    /**
+     * Creates, initializes, and returns a ready AudioRecord.
+     * Throws [IllegalStateException] when the mic is unavailable.
+     */
+    @SuppressLint("MissingPermission")
+    private fun createRecord(): AudioRecord {
         val minBuf = AudioRecord.getMinBufferSize(
             SAMPLE_RATE,
             AudioFormat.CHANNEL_IN_MONO,
@@ -215,53 +249,45 @@ class AudioRecorder(
                 // Unsupported on this device/ROM; directional hint is best-effort.
             }
         }
-        requestExclusiveFocus()
-        buffer = ByteArrayOutputStream()
-        _peakLevel = 0f
-        anyNoiseAtAll = false
-        captureStartMs = System.currentTimeMillis()
-        record.startRecording()
-        if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-            record.release()
-            releaseAudioRoute()
-            throw IllegalStateException("Mic unavailable")
-        }
-        recorder = record
-        recording.set(true)
+        return record
+    }
+
+    /** Capture-thread body: reads PCM into [buffer] and forwards levels/chunks. */
+    private fun captureLoop(record: AudioRecord) {
+        android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
         val startedAt = System.currentTimeMillis()
-        val thread = Thread({
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
-            val chunk = ByteArray(3200)
-            while (recording.get()) {
-                if (System.currentTimeMillis() - startedAt >= MAX_DURATION_MS) break
-                val read = try {
-                    record.read(chunk, 0, chunk.size)
-                } catch (e: Exception) {
-                    break
-                }
-                if (read > 0) {
-                    buffer?.write(chunk, 0, read)
-                    val lvl = rmsLevel(chunk, read)
-                    if (lvl > 0.0001f) anyNoiseAtAll = true
-                    if (lvl > _peakLevel) _peakLevel = lvl
-                    onLevel(magnitude(lvl))
-                    try {
-                        onPcmChunk(chunk.copyOf(read))
-                    } catch (e: Exception) {
-                        // Streaming consumer failed; capture continues regardless.
-                    }
-                } else if (read == 0) {
-                    // Healthy streams may return 0; only stop if the mic dropped.
-                    if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) break
-                } else {
-                    // read < 0 signals an error; stop capture.
-                    break
-                }
+        val chunk = ByteArray(CHUNK_BYTES)
+        while (recording.get()) {
+            if (System.currentTimeMillis() - startedAt >= MAX_DURATION_MS) break
+            val read = try {
+                record.read(chunk, 0, chunk.size)
+            } catch (e: Exception) {
+                break
             }
-            recording.set(false)
-        }, "VoiceImeRecord")
-        recordingThread = thread
-        thread.start()
+            if (read > 0) {
+                synchronized(bufferLock) { buffer?.write(chunk, 0, read) }
+                val lvl = rmsLevel(chunk, read)
+                if (lvl > NOISE_FLOOR) anyNoiseAtAll = true
+                if (lvl > _peakLevel) _peakLevel = lvl
+                try {
+                    onLevel(magnitude(lvl))
+                } catch (e: Exception) {
+                    // Listener failed; capture continues regardless.
+                }
+                try {
+                    onPcmChunk(chunk.copyOf(read))
+                } catch (e: Exception) {
+                    // Streaming consumer failed; capture continues regardless.
+                }
+            } else if (read == 0) {
+                // Healthy streams may return 0; only stop if the mic dropped.
+                if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) break
+            } else {
+                // read < 0 signals an error; stop capture.
+                break
+            }
+        }
+        recording.set(false)
     }
 
     /**
@@ -269,23 +295,20 @@ class AudioRecorder(
      * The peak is read only after joining the recording thread, so the last
      * buffer write happens-before this read (no early/zero peak race).
      *
-     * The [recordingThread.join] is bounded (2 s) but still blocks the caller,
-     * so the service calls this from a background thread (never the UI thread).
+     * The join is bounded (2 s) with an unbounded follow-up only when the
+     * thread is still alive, but it still blocks the caller, so the service
+     * calls this from a background thread (never the UI thread).
      */
     fun stop(): Pair<ByteArray, Float> {
         recording.set(false)
-        try {
-            recordingThread?.join(2000)
-        } catch (e: InterruptedException) {
-            Thread.currentThread().interrupt()
-        }
+        joinRecordingThread()
         recordingThread = null
         val peak = _peakLevel
         try {
-            val pcm = buffer?.toByteArray() ?: ByteArray(0)
+            val pcm = synchronized(bufferLock) { buffer?.toByteArray() } ?: ByteArray(0)
             return pcmToWav(pcm, SAMPLE_RATE) to peak
         } finally {
-            buffer = null
+            synchronized(bufferLock) { buffer = null }
             releaseRecorder()
             releaseAudioRoute()
         }
@@ -294,15 +317,27 @@ class AudioRecorder(
     /** Discards any captured audio without encoding. Caller must be off the UI thread (joins). */
     fun discard() {
         recording.set(false)
+        joinRecordingThread()
+        recordingThread = null
+        synchronized(bufferLock) { buffer = null }
+        releaseRecorder()
+        releaseAudioRoute()
+    }
+
+    /**
+     * Bounded join, then an unbounded second join if the thread is still
+     * alive (typically blocked in `record.read`). Callers are already
+     * documented off-UI-thread, so waiting out a blocked read cannot wedge
+     * the UI — and it guarantees the capture thread can no longer touch
+     * [buffer] when stop()/discard() snapshot or clear it.
+     */
+    private fun joinRecordingThread() {
+        val thread = recordingThread ?: return
         try {
-            recordingThread?.join(2000)
+            thread.join(STOP_JOIN_MS)
+            if (thread.isAlive) thread.join()
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
-        } finally {
-            recordingThread = null
-            buffer = null
-            releaseRecorder()
-            releaseAudioRoute()
         }
     }
 

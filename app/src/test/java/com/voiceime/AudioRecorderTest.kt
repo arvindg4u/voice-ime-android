@@ -72,6 +72,27 @@ class AudioRecorderTest {
     }
 
     @Test
+    fun `stop without start returns empty wav and silent peak`() {
+        val rec = AudioRecorder()
+        val (wav, peak) = rec.stop()
+        assertEquals(44, wav.size)
+        assertTrue(AudioRecorder.isSilent(peak))
+    }
+
+    @Test
+    fun `double stop is safe`() {
+        val rec = AudioRecorder()
+        rec.stop()
+        val (wav, _) = rec.stop()
+        assertEquals(44, wav.size)
+    }
+
+    @Test
+    fun `discard without start is safe`() {
+        AudioRecorder().discard()
+    }
+
+    @Test
     fun `enterLabel maps action ids to names`() {
         assertEquals("Go", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_GO))
         assertEquals("Search", VoiceImeService.enterLabel(EditorInfo.IME_ACTION_SEARCH))
