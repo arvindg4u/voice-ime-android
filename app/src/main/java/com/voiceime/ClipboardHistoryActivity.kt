@@ -73,8 +73,8 @@ class ClipboardHistoryActivity : AppCompatActivity() {
         enableSwitch.setOnCheckedChangeListener { _, checked ->
             scope.launch {
                 withContext(Dispatchers.IO) {
-                    setHistoryEnabled(checked)
-                    // Sync this screen's in-memory snapshot (helper works on its own instance).
+                    setClipboardEnabled(this@ClipboardHistoryActivity, checked)
+                    // The helper constructs its own store instance, so sync this screen's in-memory snapshot.
                     store.setEnabled(checked)
                 }
                 adapter.setEntries(store.snapshot())
@@ -152,10 +152,6 @@ class ClipboardHistoryActivity : AppCompatActivity() {
 
     private fun historyEnabled(): Boolean =
         getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_ENABLED, false)
-
-    private fun setHistoryEnabled(value: Boolean) {
-        getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, value).apply()
-    }
 
     companion object {
         const val PREFS = "voice_ime_clipboard"
