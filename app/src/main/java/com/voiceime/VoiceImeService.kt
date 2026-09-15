@@ -56,6 +56,9 @@ class VoiceImeService : InputMethodService() {
          */
         private const val BLOCKED_CHECK_INTERVAL_MS = 1000L
 
+        /** Hard recording cap for both the one-shot and live paths. */
+        private const val RECORD_CAP_MS = 300_000L
+
         /** Label for the Enter button from the editor's action id. */
         internal fun enterLabel(actionId: Int): String = when (actionId and EditorInfo.IME_MASK_ACTION) {
             EditorInfo.IME_ACTION_GO -> "Go"
@@ -188,7 +191,15 @@ class VoiceImeService : InputMethodService() {
         clipBadge?.setOnClickListener { showClipPopup() }
         backButton = view.findViewById(R.id.imeBack)
         backButton?.setOnClickListener { onBackTapped() }
+        wireInputViewListeners()
 
+        rootView = view
+        renderState()
+        return view
+    }
+
+    /** Wires the tap listeners for the inflated input view. */
+    private fun wireInputViewListeners() {
         micButton?.setOnClickListener { onMicTapped() }
         cancelButton?.setOnClickListener { onCancelTapped() }
         retryButton?.setOnClickListener {
@@ -200,10 +211,6 @@ class VoiceImeService : InputMethodService() {
             hapticTap()
         }
         enterButton?.setOnClickListener { onEnterTapped() }
-
-        rootView = view
-        renderState()
-        return view
     }
 
     /**
@@ -226,10 +233,18 @@ class VoiceImeService : InputMethodService() {
         }
         layout.addView(mic)
         layout.addView(status)
+        clearOptionalViews()
         micButton = mic
+        statusText = status
+        rootView = layout
+        renderState()
+        return layout
+    }
+
+    /** Nulls every view the fallback layout does not provide. */
+    private fun clearOptionalViews() {
         transportIcon = null
         transportLabel = null
-        statusText = status
         timerText = null
         waveView = null
         statusDot = null
@@ -244,9 +259,6 @@ class VoiceImeService : InputMethodService() {
         actionsRow = null
         clipBadge = null
         backButton = null
-        rootView = layout
-        renderState()
-        return layout
     }
 
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
@@ -454,6 +466,14 @@ class VoiceImeService : InputMethodService() {
             return
         }
         state = State.RECORDING
+        beginCapture { finishRecording(upload = true) }
+    }
+
+    /**
+     * Shared capture prologue for startRecording/startLiveStreaming: state,
+     * timer, and cap wiring. The [onCap] callback fires on the 5 min cap.
+     */
+    private fun beginCapture(onCap: () -> Unit) {
         recordStartMs = System.currentTimeMillis()
         lastTimerSecond = -1
         blockedHintShown = false
@@ -465,9 +485,9 @@ class VoiceImeService : InputMethodService() {
         // Named handle (not an anonymous lambda) so stopTimer() can remove
         // exactly this callback instead of wiping the whole message queue.
         capRunnable?.let { mainHandler.removeCallbacks(it) }
-        val cap = Runnable { if (state == State.RECORDING) finishRecording(upload = true) }
+        val cap = Runnable { if (state == State.RECORDING) onCap() }
         capRunnable = cap
-        mainHandler.postDelayed(cap, 300_000)
+        mainHandler.postDelayed(cap, RECORD_CAP_MS)
     }
 
     /**
@@ -484,17 +504,14 @@ class VoiceImeService : InputMethodService() {
     /** Guard for the session currently allowed to write live buffers. */
     private val liveGuard = LiveSessionGuard()
 
-    private fun startLiveStreaming() {
-        cancelWork()
-        val keys = normalizeKeys(settings.apiKeys)
-        if (keys.isEmpty()) {
-            showError(getString(R.string.ime_error_no_key))
-            return
-        }
+    /**
+     * Opens the live session with guarded interim/final/error callbacks.
+     * Capture the session id at start: reading the guard at fire time
+     * would see the converged value and accept every session's
+     * callbacks, including a previous session's late ones.
+     */
+    private fun openLiveSession(keys: List<String>): LlmClient.LiveSession {
         val model = settings.model
-        // Capture the session id at start: reading the guard at fire time
-        // would see the converged value and accept every session's
-        // callbacks, including a previous session's late ones.
         val sessionId = liveGuard.next()
         val session = llm.startLiveSession(
             key = keys[keyCursor % keys.size],
@@ -524,6 +541,17 @@ class VoiceImeService : InputMethodService() {
             },
         )
         liveStreamingSession = session
+        return session
+    }
+
+    private fun startLiveStreaming() {
+        cancelWork()
+        val keys = normalizeKeys(settings.apiKeys)
+        if (keys.isEmpty()) {
+            showError(getString(R.string.ime_error_no_key))
+            return
+        }
+        val session = openLiveSession(keys)
         val rec = AudioRecorder(
             this@VoiceImeService,
             onLevel = { level ->
@@ -548,17 +576,7 @@ class VoiceImeService : InputMethodService() {
         liveFinalParts.setLength(0)
         liveLastInterim = ""
         state = State.RECORDING
-        recordStartMs = System.currentTimeMillis()
-        lastTimerSecond = -1
-        blockedHintShown = false
-        lastBlockedCheckMs = 0L
-        renderState()
-        statusText?.setText(R.string.ime_status_recording)
-        startTimer()
-        capRunnable?.let { mainHandler.removeCallbacks(it) }
-        val cap = Runnable { if (state == State.RECORDING) finishRecording(upload = true) }
-        capRunnable = cap
-        mainHandler.postDelayed(cap, 300_000)
+        beginCapture { finishRecording(upload = true) }
         if (state == State.RECORDING) hapticTap()
     }
 
@@ -566,32 +584,99 @@ class VoiceImeService : InputMethodService() {
      * Stop on a Live session: close the turn and commit whatever finalized
      * text arrived (plus any last interim preview as fallback). Never hangs:
      * no 75 s wait — the socket already streamed everything live.
+     *
+     * Stops the timer + recorder and reports the captured peak loudness.
+     * Runs on the caller thread: keep off the UI thread (joins the
+     * recording thread).
      */
+    private suspend fun stopLiveRecorder(rec: AudioRecorder?): Float {
+        return try {
+            withContext(Dispatchers.IO) { rec?.stop() }?.second ?: 0f
+        } catch (e: CancellationException) { throw e } catch (e: Exception) {
+            0f
+        }
+    }
+
+    /**
+     * Closes the live turn and waits for the server's final signal
+     * (~12 s fallback). Returns true when the server finalized the turn.
+     */
+    private suspend fun awaitLiveFinal(session: LlmClient.LiveSession?): Boolean {
+        try {
+            session?.finish()
+        } catch (e: Exception) {
+            // Session already dead; fall through to whatever arrived.
+        }
+        // Signal-driven: commit the moment the server finalizes
+        // (turnComplete/first final/close-with-text); ~12 s fallback
+        // commits from whatever interim/final text already arrived.
+        val signaled = try {
+            session?.awaitFinal(12_000) ?: false
+        } catch (e: CancellationException) { throw e } catch (e: Exception) {
+            false
+        }
+        if (!signaled) {
+            android.util.Log.d("VoiceIme", "live-commit: no final signal in 12s, committing fallback")
+        }
+        try {
+            session?.close()
+        } catch (e: Exception) {
+            // Socket already settled via turnComplete/onClosed.
+        }
+        return signaled
+    }
+
+    /**
+     * Assembles the commit text: finalized parts, else last interim,
+     * else the status preview (never a "Transcribing…"/"Recording…"
+     * status string). Empty when nothing usable arrived.
+     */
+    private fun resolveLiveText(): String {
+        val interim = liveLastInterim.trim()
+        return liveFinalParts.toString().trim()
+            .ifEmpty { interim }
+            .ifEmpty {
+                val shown = statusText?.text?.toString().orEmpty().trim()
+                // The status view otherwise still holds "Transcribing…" —
+                // never commit a status string as a transcript.
+                if (shown == getString(R.string.ime_status_uploading) ||
+                    shown == getString(R.string.ime_status_recording)
+                ) "" else shown
+            }
+    }
+
+    /** Tears down the live capture side and reports the captured peak. */
+    private suspend fun beginLiveCommit(rec: AudioRecorder?): Pair<Float, LlmClient.LiveSession?> {
+        val peak = stopLiveRecorder(rec)
+        val session = liveStreamingSession
+        liveStreamingSession = null
+        return peak to session
+    }
+
+    /** Cancels without committing: closes the session and returns to idle. */
+    private fun abortLiveCommit(session: LlmClient.LiveSession?) {
+        try {
+            session?.close()
+        } catch (e: Exception) {
+            // Already gone.
+        }
+        lastWav = null
+        state = State.IDLE
+        renderState()
+    }
+
     private fun finishLiveStreaming(upload: Boolean) {
         stopTimer()
         val rec = recorder
         recorder = null
-        val session = liveStreamingSession
-        liveStreamingSession = null
         state = State.UPLOADING
         renderState()
         statusText?.setText(R.string.ime_status_uploading)
         liveCommitJob?.cancel()
         liveCommitJob = serviceScope.launch {
-            val peak = try {
-                withContext(Dispatchers.IO) { rec?.stop() }?.second ?: 0f
-            } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                0f
-            }
+            val (peak, session) = beginLiveCommit(rec)
             if (!upload) {
-                try {
-                    session?.close()
-                } catch (e: Exception) {
-                    // Already gone.
-                }
-                lastWav = null
-                state = State.IDLE
-                renderState()
+                abortLiveCommit(session)
                 return@launch
             }
             // Hand the session to the commit flow: lifecycle must not kill it.
@@ -610,38 +695,8 @@ class VoiceImeService : InputMethodService() {
                 showError(getString(R.string.ime_error_no_speech))
                 return@launch
             }
-            try {
-                session?.finish()
-            } catch (e: Exception) {
-                // Session already dead; fall through to whatever arrived.
-            }
-            // Signal-driven: commit the moment the server finalizes
-            // (turnComplete/first final/close-with-text); ~12 s fallback
-            // commits from whatever interim/final text already arrived.
-            val signaled = try {
-                session?.awaitFinal(12_000) ?: false
-            } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                false
-            }
-            if (!signaled) {
-                android.util.Log.d("VoiceIme", "live-commit: no final signal in 12s, committing fallback")
-            }
-            try {
-                session?.close()
-            } catch (e: Exception) {
-                // Socket already settled via turnComplete/onClosed.
-            }
-            val interim = liveLastInterim.trim()
-            val text = liveFinalParts.toString().trim()
-                .ifEmpty { interim }
-                .ifEmpty {
-                    val shown = statusText?.text?.toString().orEmpty().trim()
-                    // The status view otherwise still holds "Transcribing…" —
-                    // never commit a status string as a transcript.
-                    if (shown == getString(R.string.ime_status_uploading) ||
-                        shown == getString(R.string.ime_status_recording)
-                    ) "" else shown
-                }
+            awaitLiveFinal(session)
+            val text = resolveLiveText()
             if (text.isEmpty()) {
                 showError(getString(R.string.ime_error_empty))
             } else {
@@ -770,15 +825,8 @@ class VoiceImeService : InputMethodService() {
         }
     }
 
-    private fun deliverTranscript(text: String) {
-        if (text.isBlank()) {
-            showError(getString(R.string.ime_error_empty))
-            return
-        }
-        lastWav = null
-        val capped = ClipboardPolicy.truncateCommit(text)
-        val saveJob = maybeSaveClip(capped)
-        // Clipboard first so the text survives even if commit fails.
+    /** Clipboard first so the text survives even if commit fails. */
+    private fun copyTranscriptToClipboard(capped: String) {
         try {
             val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
             val clip = ClipData.newPlainText("voice-ime", capped)
@@ -788,20 +836,33 @@ class VoiceImeService : InputMethodService() {
         } catch (e: Exception) {
             // Clipboard unavailable; still try commitText.
         }
-        val ic = currentInputConnection
-        if (ic != null) {
+    }
+
+    private fun commitTranscriptToInput(capped: String) {
+        val ic = currentInputConnection ?: return
+        try {
+            ic.finishComposingText()
+            ic.beginBatchEdit()
             try {
-                ic.finishComposingText()
-                ic.beginBatchEdit()
-                try {
-                    ic.commitText(capped, 1)
-                } finally {
-                    ic.endBatchEdit()
-                }
-            } catch (e: Exception) {
-                // Fall through to clipboard-only path with toast.
+                ic.commitText(capped, 1)
+            } finally {
+                ic.endBatchEdit()
             }
+        } catch (e: Exception) {
+            // Fall through to clipboard-only path with toast.
         }
+    }
+
+    private fun deliverTranscript(text: String) {
+        if (text.isBlank()) {
+            showError(getString(R.string.ime_error_empty))
+            return
+        }
+        lastWav = null
+        val capped = ClipboardPolicy.truncateCommit(text)
+        val saveJob = maybeSaveClip(capped)
+        copyTranscriptToClipboard(capped)
+        commitTranscriptToInput(capped)
         if (capped.length != text.length) {
             Toast.makeText(this, R.string.ime_commit_truncated, Toast.LENGTH_LONG).show()
         }
@@ -901,10 +962,23 @@ class VoiceImeService : InputMethodService() {
         // the whole take, otherwise the device sleeps mid-dictation and the
         // recording is lost. Cleared on every non-recording state below.
         rootView?.keepScreenOn = recording
-        // Transport pill: icon + label follow state (mic idle, stop
-        // recording, sending uploading). Timer ticks inside the pill.
-        // Ghost cancel sits in-row while recording/uploading — no second
-        // button row.
+        renderTransportPill(recording, uploading)
+        renderActionsRow(recording, uploading, error)
+        renderEnterKey(error)
+        if (state == State.IDLE) {
+            statusText?.setText(R.string.ime_status_idle)
+            timerText?.text = "0:00"
+            waveView?.reset()
+        }
+    }
+
+    /**
+     * Transport pill: icon + label follow state (mic idle, stop
+     * recording, sending uploading). Timer ticks inside the pill.
+     * Ghost cancel sits in-row while recording/uploading — no second
+     * button row.
+     */
+    private fun renderTransportPill(recording: Boolean, uploading: Boolean) {
         val pillRes = if (recording) {
             R.string.ime_transport_stop
         } else if (uploading) {
@@ -926,9 +1000,14 @@ class VoiceImeService : InputMethodService() {
             micButton?.contentDescription = micDesc
         }
         setVisible(timerText, recording)
-        // Collapse the actions row unless a child is actually visible:
-        // Cancel now lives in the transport row but still joins the rule,
-        // so the wiring stays uniform if it ever moves back.
+    }
+
+    /**
+     * Collapse the actions row unless a child is actually visible:
+     * Cancel now lives in the transport row but still joins the rule,
+     * so the wiring stays uniform if it ever moves back.
+     */
+    private fun renderActionsRow(recording: Boolean, uploading: Boolean, error: Boolean) {
         val showCancel = recording || uploading
         setVisible(cancelButton, showCancel)
         val showRetry = error && lastWav != null
@@ -939,6 +1018,9 @@ class VoiceImeService : InputMethodService() {
             actionsRow,
             ImeLayoutPolicy.actionsRowVisible(showCancel, showRetry, showSettings),
         )
+    }
+
+    private fun renderEnterKey(error: Boolean) {
         val idleish = state == State.IDLE || error
         setVisible(enterButton, idleish)
         if (idleish) {
@@ -950,11 +1032,6 @@ class VoiceImeService : InputMethodService() {
             }
         } else {
             lastEnterAction = Int.MIN_VALUE
-        }
-        if (state == State.IDLE) {
-            statusText?.setText(R.string.ime_status_idle)
-            timerText?.text = "0:00"
-            waveView?.reset()
         }
     }
 
@@ -1234,41 +1311,13 @@ class VoiceImeService : InputMethodService() {
             return
         }
         val list = ListView(this).apply {
-            adapter = object : BaseAdapter() {
-                override fun getCount(): Int = entries.size
-                override fun getItem(position: Int): ClipboardEntry = entries[position]
-                override fun getItemId(position: Int): Long = position.toLong()
-                override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-                    val row = convertView as? TextView ?: TextView(this@VoiceImeService).apply {
-                        minimumHeight = resources.getDimensionPixelSize(R.dimen.clip_popup_row_min_height)
-                        textSize = resources.getDimension(R.dimen.clip_popup_text_size) /
-                            resources.displayMetrics.scaledDensity
-                    }
-                    row.text = ClipboardPolicy.sanitizePreview(getItem(position))
-                    return row
-                }
-            }
+            adapter = clipPopupAdapter(entries)
             setOnItemClickListener { _, _, position, _ ->
                 dismissClipPopup()
                 commitClipEntry(entries[position])
             }
             setOnItemLongClickListener { _, _, position, _ ->
-                val removed = entries[position]
-                serviceScope.launch {
-                    val updated = try {
-                        withContext(Dispatchers.IO) { store()?.deleteAt(removed.id) }
-                    } catch (e: CancellationException) { throw e } catch (e: Exception) {
-                        null
-                    }
-                    if (updated != null) {
-                        clipEntries = updated
-                        mainHandler.post {
-                            dismissClipPopup()
-                            renderClipChip(updated)
-                            if (updated.isNotEmpty()) showClipPopup()
-                        }
-                    }
-                }
+                deleteClipEntry(entries[position])
                 true
             }
         }
@@ -1285,6 +1334,41 @@ class VoiceImeService : InputMethodService() {
             popup.showAtLocation(root, Gravity.BOTTOM, 0, 0)
         } catch (e: Exception) {
             clipPopup = null
+        }
+    }
+
+    private fun clipPopupAdapter(entries: List<ClipboardEntry>): BaseAdapter {
+        return object : BaseAdapter() {
+            override fun getCount(): Int = entries.size
+            override fun getItem(position: Int): ClipboardEntry = entries[position]
+            override fun getItemId(position: Int): Long = position.toLong()
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                val row = convertView as? TextView ?: TextView(this@VoiceImeService).apply {
+                    minimumHeight = resources.getDimensionPixelSize(R.dimen.clip_popup_row_min_height)
+                    textSize = resources.getDimension(R.dimen.clip_popup_text_size) /
+                        resources.displayMetrics.scaledDensity
+                }
+                row.text = ClipboardPolicy.sanitizePreview(getItem(position))
+                return row
+            }
+        }
+    }
+
+    private fun deleteClipEntry(entry: ClipboardEntry) {
+        serviceScope.launch {
+            val updated = try {
+                withContext(Dispatchers.IO) { store()?.deleteAt(entry.id) }
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
+                null
+            }
+            if (updated != null) {
+                clipEntries = updated
+                mainHandler.post {
+                    dismissClipPopup()
+                    renderClipChip(updated)
+                    if (updated.isNotEmpty()) showClipPopup()
+                }
+            }
         }
     }
 

@@ -39,11 +39,9 @@ internal class LiveSocket(
     private var writerThread: Thread? = null
     private var readerThread: Thread? = null
 
-    /** Connects, handshakes, and starts the reader/writer threads. */
+    /** Opens the raw TLS socket and remembers it for teardown. */
     @Throws(LiveSocketException::class)
-    fun connect() {
-        val keyBytes = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-        val wsKey = java.util.Base64.getEncoder().encodeToString(keyBytes)
+    private fun openTlsSocket(): Socket {
         val sock = try {
             SSLSocketFactory.getDefault().createSocket(host, 443).apply {
                 soTimeout = 0
@@ -53,19 +51,12 @@ internal class LiveSocket(
             throw LiveSocketException("Network error — check connection", e)
         }
         socket = sock
-        val input = try {
-            sock.getInputStream()
-        } catch (e: Exception) {
-            closeSocket()
-            throw LiveSocketException("Network error — check connection", e)
-        }
-        val output = try {
-            sock.getOutputStream()
-        } catch (e: Exception) {
-            closeSocket()
-            throw LiveSocketException("Network error — check connection", e)
-        }
-        out = output
+        return sock
+    }
+
+    /** Writes the WebSocket upgrade request onto the fresh socket. */
+    @Throws(LiveSocketException::class)
+    private fun sendHandshake(output: OutputStream, wsKey: String) {
         val request = buildString {
             append("GET ").append(path).append(" HTTP/1.1\r\n")
             append("Host: ").append(host).append("\r\n")
@@ -82,6 +73,11 @@ internal class LiveSocket(
             closeSocket()
             throw LiveSocketException("Network error — check connection", e)
         }
+    }
+
+    /** Reads the handshake reply; throws a user-safe error when not 101. */
+    @Throws(LiveSocketException::class)
+    private fun awaitHandshake(input: InputStream) {
         val statusLine = try {
             readHttpHeaders(input)
         } catch (e: LiveSocketException) {
@@ -97,6 +93,29 @@ internal class LiveSocket(
             throw LiveSocketException(mapHandshakeError(statusLine))
         }
         log("live-wire", "handshake ok")
+    }
+
+    /** Connects, handshakes, and starts the reader/writer threads. */
+    @Throws(LiveSocketException::class)
+    fun connect() {
+        val keyBytes = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
+        val wsKey = java.util.Base64.getEncoder().encodeToString(keyBytes)
+        val sock = openTlsSocket()
+        val input = try {
+            sock.getInputStream()
+        } catch (e: Exception) {
+            closeSocket()
+            throw LiveSocketException("Network error — check connection", e)
+        }
+        val output = try {
+            sock.getOutputStream()
+        } catch (e: Exception) {
+            closeSocket()
+            throw LiveSocketException("Network error — check connection", e)
+        }
+        out = output
+        sendHandshake(output, wsKey)
+        awaitHandshake(input)
         writerThread = Thread({ writeLoop() }, "VoiceImeLiveWriter").apply {
             isDaemon = true
             start()
@@ -169,42 +188,57 @@ internal class LiveSocket(
         }
     }
 
+    /** Delivers a close frame to the owner; at most once. */
+    private fun deliverClose(message: WsMessage) {
+        if (!terminal) {
+            terminal = true
+            closeSocket()
+            try {
+                onClosed(message.closeCode, message.closeReason)
+            } catch (_: Exception) {
+                // Listener must never throw into us.
+            }
+        }
+    }
+
+    /** Answers a ping with a pong carrying the same payload. */
+    private fun answerPing(message: WsMessage) {
+        // Ping: answer with pong carrying the same payload.
+        try {
+            out?.let { writeFrame(it, 0xA, message.payload) }
+        } catch (_: Exception) {
+            // Pong is best-effort.
+        }
+    }
+
+    /** Decodes a text/binary frame and forwards it to the owner. */
+    private fun deliverText(message: WsMessage) {
+        val text = try {
+            String(message.payload, Charsets.UTF_8)
+        } catch (e: Exception) {
+            return
+        }
+        try {
+            onText(text)
+        } catch (_: Exception) {
+            // Listener must never throw into us.
+        }
+    }
+
     private fun readLoop(input: InputStream) {
         try {
             while (!terminal) {
                 val message = readFrame(input) ?: return
                 if (message.opcode == 0x8) {
-                    if (!terminal) {
-                        terminal = true
-                        closeSocket()
-                        try {
-                            onClosed(message.closeCode, message.closeReason)
-                        } catch (_: Exception) {
-                            // Listener must never throw into us.
-                        }
-                    }
+                    deliverClose(message)
                     return
                 }
                 if (message.opcode == 0x9) {
-                    // Ping: answer with pong carrying the same payload.
-                    try {
-                        out?.let { writeFrame(it, 0xA, message.payload) }
-                    } catch (_: Exception) {
-                        // Pong is best-effort.
-                    }
+                    answerPing(message)
                     continue
                 }
                 if (message.opcode == 0x1 || message.opcode == 0x2) {
-                    val text = try {
-                        String(message.payload, Charsets.UTF_8)
-                    } catch (e: Exception) {
-                        continue
-                    }
-                    try {
-                        onText(text)
-                    } catch (_: Exception) {
-                        // Listener must never throw into us.
-                    }
+                    deliverText(message)
                 }
                 // 0xA pong and reserved opcodes: ignore.
             }
@@ -304,51 +338,68 @@ internal class LiveSocket(
 
     private data class WsMessage(val opcode: Int, val payload: ByteArray, val closeCode: Int = 1000, val closeReason: String = "")
 
+    private data class FrameHeader(val fin: Int, val frameOp: Int, val payload: ByteArray)
+
+    /** Reads one frame header + payload; resolves extended lengths. */
+    @Throws(EOFException::class)
+    private fun readFrameHeader(input: InputStream): FrameHeader {
+        val header = readExactly(input, 2)
+        val first = header[0].toInt() and 0xFF
+        val second = header[1].toInt() and 0xFF
+        val fin = (first ushr 7) and 1
+        // Servers MUST NOT mask; a masked server frame is a protocol error.
+        val masked = (second ushr 7) and 1
+        var length = (second and 0x7F).toLong()
+        if (masked != 0) throw EOFException("masked server frame")
+        when (length) {
+            126L -> length = readUShort(input).toLong()
+            127L -> {
+                length = readULong(input)
+                if (length < 0 || length > MAX_FRAME_BYTES) throw EOFException("frame too large")
+            }
+        }
+        if (length > MAX_FRAME_BYTES) throw EOFException("frame too large")
+        val payload = if (length > 0) readExactly(input, length.toInt()) else ByteArray(0)
+        return FrameHeader(fin, first and 0x0F, payload)
+    }
+
+    /**
+     * Handles close/ping/pong control frames. Returns the message to
+     * deliver, or null when assembly must continue (data frames).
+     */
+    private fun handleControlFrame(frameOp: Int, fin: Int, payload: ByteArray): WsMessage? {
+        if (frameOp == 0x8) {
+            // Close: optional 2-byte code + UTF-8 reason.
+            var code = 1000
+            var reason = ""
+            if (payload.size >= 2) {
+                code = ((payload[0].toInt() and 0xFF) shl 8) or (payload[1].toInt() and 0xFF)
+                if (payload.size > 2) {
+                    reason = try {
+                        String(payload, 2, payload.size - 2, Charsets.UTF_8)
+                    } catch (e: Exception) {
+                        ""
+                    }
+                }
+            }
+            return WsMessage(0x8, ByteArray(0), code, reason)
+        }
+        if (frameOp == 0x9 || frameOp == 0xA) {
+            // Ping/pong are standalone control frames (never fragmented).
+            if (fin == 0) throw EOFException("fragmented control frame")
+            return WsMessage(frameOp, payload)
+        }
+        return null
+    }
+
     /** Reads one complete message, assembling fragmented continuation frames. */
     @Throws(EOFException::class)
     private fun readFrame(input: InputStream): WsMessage? {
         var opcode = -1
         val assembled = ByteArrayOutputStream()
         while (true) {
-            val header = readExactly(input, 2)
-            val first = header[0].toInt() and 0xFF
-            val second = header[1].toInt() and 0xFF
-            val fin = (first ushr 7) and 1
-            // Servers MUST NOT mask; a masked server frame is a protocol error.
-            val masked = (second ushr 7) and 1
-            var length = (second and 0x7F).toLong()
-            if (masked != 0) throw EOFException("masked server frame")
-            when (length) {
-                126L -> length = readUShort(input).toLong()
-                127L -> {
-                    length = readULong(input)
-                    if (length < 0 || length > MAX_FRAME_BYTES) throw EOFException("frame too large")
-                }
-            }
-            if (length > MAX_FRAME_BYTES) throw EOFException("frame too large")
-            val payload = if (length > 0) readExactly(input, length.toInt()) else ByteArray(0)
-            val frameOp = first and 0x0F
-            if (frameOp == 0x8) {
-                // Close: optional 2-byte code + UTF-8 reason.
-                var code = 1000
-                var reason = ""
-                if (payload.size >= 2) {
-                    code = ((payload[0].toInt() and 0xFF) shl 8) or (payload[1].toInt() and 0xFF)
-                    if (payload.size > 2) {
-                        reason = try {
-                            String(payload, 2, payload.size - 2, Charsets.UTF_8)
-                        } catch (e: Exception) {
-                            ""
-                        }
-                    }
-                }
-                return WsMessage(0x8, ByteArray(0), code, reason)
-            }
-            if (frameOp == 0x9 || frameOp == 0xA) {
-                // Ping/pong are standalone control frames (never fragmented).
-                if (fin == 0) throw EOFException("fragmented control frame")
-                return WsMessage(frameOp, payload)
-            }
+            val (fin, frameOp, payload) = readFrameHeader(input)
+            handleControlFrame(frameOp, fin, payload)?.let { return it }
             if (frameOp == 0x0) {
                 if (opcode < 0) throw EOFException("stray continuation")
             } else {
