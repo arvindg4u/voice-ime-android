@@ -27,6 +27,7 @@ import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -579,7 +580,7 @@ class VoiceImeService : InputMethodService() {
         liveCommitJob = serviceScope.launch {
             val peak = try {
                 withContext(Dispatchers.IO) { rec?.stop() }?.second ?: 0f
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 0f
             }
             if (!upload) {
@@ -619,7 +620,7 @@ class VoiceImeService : InputMethodService() {
             // commits from whatever interim/final text already arrived.
             val signaled = try {
                 session?.awaitFinal(12_000) ?: false
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 false
             }
             if (!signaled) {
@@ -672,7 +673,7 @@ class VoiceImeService : InputMethodService() {
         serviceScope.launch {
             val (wav, peak) = try {
                 withContext(Dispatchers.IO) { rec?.stop() } ?: (ByteArray(0) to 0f)
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 ByteArray(0) to 0f
             }
             finishRecordingAfterStop(upload, wav, peak)
@@ -1017,7 +1018,7 @@ class VoiceImeService : InputMethodService() {
                 withContext(Dispatchers.IO) {
                     if (s == null) emptyList() else s.load()
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 emptyList()
             }
             clipEntries = entries
@@ -1102,7 +1103,7 @@ class VoiceImeService : InputMethodService() {
         return serviceScope.launch {
             val updated = try {
                 withContext(Dispatchers.IO) { store()?.add(text) }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 // History is best-effort; delivery already succeeded.
                 null
             }
@@ -1198,7 +1199,7 @@ class VoiceImeService : InputMethodService() {
         serviceScope.launch {
             val updated = try {
                 withContext(Dispatchers.IO) { store()?.add(text) } ?: return@launch
-            } catch (e: Exception) {
+            } catch (e: CancellationException) { throw e } catch (e: Exception) {
                 return@launch
             }
             clipEntries = updated
@@ -1260,7 +1261,7 @@ class VoiceImeService : InputMethodService() {
                 serviceScope.launch {
                     val updated = try {
                         withContext(Dispatchers.IO) { store()?.deleteAt(removed.id) }
-                    } catch (e: Exception) {
+                    } catch (e: CancellationException) { throw e } catch (e: Exception) {
                         null
                     }
                     if (updated != null) {
