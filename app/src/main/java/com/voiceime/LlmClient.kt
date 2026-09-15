@@ -2,11 +2,16 @@ package com.voiceime
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
@@ -14,6 +19,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.TimeUnit
 
 /** Thrown when transcription fails; message is safe to show to the user. */
@@ -53,7 +59,7 @@ class LlmClient {
      * cursor to (usedIndex + 1) % n for even spread.
      */
     @Throws(TranscribeException::class)
-    fun transcribe(
+    suspend fun transcribe(
         wav: ByteArray,
         apiKeys: List<String>,
         baseUrl: String,
@@ -81,40 +87,12 @@ class LlmClient {
                 "keys=${keys.size} start=$startIndex",
         )
 
-        val start = ((startIndex % keys.size) + keys.size) % keys.size
+        val start = rotationStart(startIndex, keys.size)
         for (i in keys.indices) {
             val idx = (start + i) % keys.size
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("x-goog-api-key", keys[idx])
-                .post(body.toRequestBody("application/json".toMediaType()))
-                .build()
-
-            val call = http.newCall(request)
-            inFlight = call
-            val code: Int
-            val payload: String
-            try {
-                val response = call.execute()
-                response.use { res ->
-                    code = res.code
-                    payload = res.body?.string().orEmpty()
-                }
-            } catch (e: IOException) {
-                if (call.isCanceled()) throw TranscribeException("cancelled", e)
-                throw TranscribeException("Network error — check connection", e)
-            } catch (e: Exception) {
-                throw TranscribeException("Transcription failed", e)
-            } finally {
-                if (inFlight === call) inFlight = null
-            }
+            val (code, payload) = executeRestCall(url, keys[idx], body)
             debugLog("transcribe", "HTTP $code key=$idx bytes=${payload.length}")
-            if (code == 429) {
-                if (i == keys.lastIndex) {
-                    throw TranscribeException("Rate limited on all keys — retry later")
-                }
-                continue
-            }
+            if (rotateOn429(code, i, keys.size)) continue
             if (code < 200 || code >= 300) {
                 if (isLiveOnlyError(code, payload)) {
                     debugLog("transcribe", "HTTP 400 requires Live API; switching transport key=$idx")
@@ -129,6 +107,54 @@ class LlmClient {
             return Pair(parseGeminiTranscript(payload), idx)
         }
         throw TranscribeException("Rate limited on all keys — retry later")
+    }
+
+    /** Normalizes [startIndex] into a valid rotation offset for [keyCount] keys. */
+    private fun rotationStart(startIndex: Int, keyCount: Int): Int =
+        ((startIndex % keyCount) + keyCount) % keyCount
+
+    /**
+     * True when the caller should try the next key (HTTP 429 with keys left);
+     * throws when every key is rate-limited. False for non-429 codes.
+     */
+    private fun rotateOn429(code: Int, attempt: Int, keyCount: Int): Boolean {
+        if (code != 429) return false
+        if (attempt == keyCount - 1) {
+            throw TranscribeException("Rate limited on all keys — retry later")
+        }
+        return true
+    }
+
+    /**
+     * Executes one REST attempt on [key], enforcing Dispatchers.IO inside the
+     * client so callers can invoke from any dispatcher (including Main).
+     * Returns the HTTP code plus body; never converts cancellation.
+     */
+    private suspend fun executeRestCall(url: String, key: String, body: String): Pair<Int, String> {
+        val request = Request.Builder()
+            .url(url)
+            .addHeader("x-goog-api-key", key)
+            .post(body.toRequestBody("application/json".toMediaType()))
+            .build()
+        val call = http.newCall(request)
+        inFlight = call
+        try {
+            return withContext(Dispatchers.IO) {
+                val response = call.execute()
+                response.use { res ->
+                    Pair(res.code, res.body?.string().orEmpty())
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            if (call.isCanceled()) throw TranscribeException("cancelled", e)
+            throw TranscribeException("Network error — check connection", e)
+        } catch (e: Exception) {
+            throw TranscribeException("Transcription failed", e)
+        } finally {
+            if (inFlight === call) inFlight = null
+        }
     }
 
     /**
@@ -173,7 +199,7 @@ class LlmClient {
         liveSession?.close()
         val session = LiveSession(baseUrl, model, key, smartMode, onInterim, onFinal, onError, ::debugLog)
         liveSession = session
-        session.open()
+        session.openAsync()
         return session
     }
 
@@ -207,8 +233,20 @@ class LlmClient {
         private val finalSignal = CompletableDeferred<Unit>()
         /** True once the owner handed the session to the commit flow. */
         @Volatile private var detached = false
+        /**
+         * Supervisor-owned scope for the one-shot connect task: a connect
+         * failure must never cancel sibling client work, and the scope is
+         * cancelled on session teardown so a late connect can't resurrect it.
+         */
+        private val openScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-        fun open() {
+        /**
+         * Connects the socket in the background: connect() does DNS + TCP +
+         * TLS synchronously and Android throws NetworkOnMainThreadException
+         * for that on mic tap. Mic capture already runs, so early audio
+         * buffers in [pending] until setupComplete flushes it.
+         */
+        fun openAsync() {
             val raw = LiveSocket(
                 host = wsHost,
                 path = wsPath,
@@ -218,39 +256,44 @@ class LlmClient {
                 log = log,
             )
             socket = raw
-            // Connect + setup MUST run off the main thread: connect() does
-            // DNS + TCP + TLS synchronously and Android throws
-            // NetworkOnMainThreadException for that (instant "network error"
-            // on mic tap). Mic capture already runs, so early audio buffers
-            // in [pending] until setupComplete flushes it.
-            Thread({
+            openScope.launch {
+                try {
+                    openSocket(raw)
+                } catch (e: CancellationException) {
+                    // Scope cancelled during teardown: propagate, never convert.
+                    throw e
+                } catch (e: Exception) {
+                    val message = e.message.orEmpty()
+                    failOnce(if (message.isBlank()) "Network error — check connection" else message, e)
+                }
+            }
+        }
+
+        /**
+         * Blocking connect + setup on Dispatchers.IO. Throws on failure so
+         * the caller's catch reports it via [failOnce].
+         */
+        private suspend fun openSocket(raw: LiveSocket) {
+            withContext(Dispatchers.IO) {
                 try {
                     raw.connect()
                 } catch (e: LiveSocketException) {
-                    failOnce(e.message ?: "Network error — check connection", e)
-                    return@Thread
-                } catch (e: Exception) {
-                    failOnce("Network error — check connection", e)
-                    return@Thread
+                    throw IOException(e.message ?: "Network error — check connection", e)
                 }
-                try {
-                    if (finished || failed) return@Thread
-                    // Setup first; audio only after the server's
-                    // setupComplete (early realtimeInput is dropped).
-                    val setupJson = buildLiveSetupJson(model, smartMode)
-                    log("live-wire", "setup bytes=" + setupJson.length)
-                    val setupOk = raw.send(setupJson)
-                    log("live-wire", "setup send=" + setupOk)
-                    if (!setupOk) {
-                        failOnce("Network error — check connection")
-                        return@Thread
-                    }
-                    synchronized(pending) { open = true }
-                } catch (e: Exception) {
-                    failOnce("Network error — check connection", e)
-                }
-                log("live-session", "open model=$model")
-            }, "VoiceImeLiveOpen").apply { isDaemon = true }.start()
+            }
+            if (finished || failed) return
+            // Setup first; audio only after the server's
+            // setupComplete (early realtimeInput is dropped).
+            val setupJson = buildLiveSetupJson(model, smartMode)
+            log("live-wire", "setup bytes=" + setupJson.length)
+            val setupOk = raw.send(setupJson)
+            log("live-wire", "setup send=" + setupOk)
+            if (!setupOk) {
+                failOnce("Network error — check connection")
+                return
+            }
+            synchronized(pending) { open = true }
+            log("live-session", "open model=$model")
         }
 
         private fun onSocketText(text: String) {
@@ -261,28 +304,7 @@ class LlmClient {
             }
             logShapeOnce(text)
             if (!setupComplete && isLiveSetupComplete(text)) {
-                setupComplete = true
-                log("live-session", "setupComplete, starting turn")
-                try {
-                    if (finished || failed) return
-                    val startOk = socket?.send(buildLiveActivityStartJson()) ?: false
-                    log("live-wire", "activityStart send=" + startOk)
-                    val drain: List<ByteArray>
-                    synchronized(pending) {
-                        drain = pending.toList()
-                        pending.clear()
-                    }
-                    for (chunk in drain) {
-                        if (finished || failed) return
-                        val ok = socket?.send(buildLiveAudioMessage(chunk)) ?: false
-                        if (!ok) {
-                            failOnce("Network error — check connection")
-                            return
-                        }
-                    }
-                } catch (e: Exception) {
-                    failOnce("Network error — check connection", e)
-                }
+                handleSetupComplete()
                 return
             }
             val fragments = parseLiveInputTranscripts(text)
@@ -312,6 +334,35 @@ class LlmClient {
             if (isLiveTurnComplete(text)) {
                 finalSignal.complete(Unit)
                 finishOk()
+            }
+        }
+
+        /**
+         * First setup ack: starts the turn and flushes audio buffered during
+         * the handshake. Runs on the socket-reader thread.
+         */
+        private fun handleSetupComplete() {
+            setupComplete = true
+            log("live-session", "setupComplete, starting turn")
+            try {
+                if (finished || failed) return
+                val startOk = socket?.send(buildLiveActivityStartJson()) ?: false
+                log("live-wire", "activityStart send=" + startOk)
+                val drain: List<ByteArray>
+                synchronized(pending) {
+                    drain = pending.toList()
+                    pending.clear()
+                }
+                for (chunk in drain) {
+                    if (finished || failed) return
+                    val ok = socket?.send(buildLiveAudioMessage(chunk)) ?: false
+                    if (!ok) {
+                        failOnce("Network error — check connection")
+                        return
+                    }
+                }
+            } catch (e: Exception) {
+                failOnce("Network error — check connection", e)
             }
         }
 
@@ -356,13 +407,6 @@ class LlmClient {
             }
         }
 
-        /**
-         * Ends the turn (Stop): activityEnd + stream end, then close. The
-         * server flushes the final transcript; onFinal fires on arrival and
-         * the socket closes via turnComplete/onClosed. Safety net: if the
-         * server never finalizes, close the socket ourselves after a grace
-         * window so Stop never orphans an open connection.
-         */
         /**
          * Sends the turn-end markers. Does NOT close: the owner awaits
          * [awaitFinal] and closes after reading the commit snapshot.
@@ -411,6 +455,7 @@ class LlmClient {
          */
         fun close() {
             finished = true
+            openScope.cancel()
             synchronized(pending) { pending.clear() }
             try {
                 socket?.close(1000, "cancel")
@@ -450,6 +495,7 @@ class LlmClient {
         private fun finishOk() {
             if (finished || failed) return
             finished = true
+            openScope.cancel()
             synchronized(pending) { pending.clear() }
             try {
                 socket?.close(1000, "")
@@ -462,6 +508,7 @@ class LlmClient {
         private fun failOnce(message: String, cause: Throwable? = null) {
             if (finished || failed) return
             failed = true
+            openScope.cancel()
             synchronized(pending) { pending.clear() }
             try {
                 socket?.close(1001, "error")
@@ -488,7 +535,7 @@ class LlmClient {
      * index of the key that worked. Same rotation contract as REST: 429
      * tries the next key, 401 fails fast via [mapHttpError].
      */
-    private fun liveTranscribe(
+    private suspend fun liveTranscribe(
         wav: ByteArray,
         keys: List<String>,
         baseUrl: String,
@@ -503,7 +550,7 @@ class LlmClient {
             "RAW host=$host model=$model pcmBytes=${pcm.size} keys=${keys.size} start=$startIndex",
         )
 
-        val start = ((startIndex % keys.size) + keys.size) % keys.size
+        val start = rotationStart(startIndex, keys.size)
         for (i in keys.indices) {
             val idx = (start + i) % keys.size
             val outcome = liveAttempt(host, baseUrl, keys[idx], model, pcm, smartMode)
@@ -530,7 +577,7 @@ class LlmClient {
      * rotation contract as the other transports: 429 tries the next key,
      * other errors fail fast. Returns transcript + working key index.
      */
-    private fun interactionsTranscribe(
+    private suspend fun interactionsTranscribe(
         wav: ByteArray,
         keys: List<String>,
         baseUrl: String,
@@ -549,40 +596,12 @@ class LlmClient {
                 "keys=${keys.size} start=$startIndex",
         )
 
-        val start = ((startIndex % keys.size) + keys.size) % keys.size
+        val start = rotationStart(startIndex, keys.size)
         for (i in keys.indices) {
             val idx = (start + i) % keys.size
-            val request = Request.Builder()
-                .url(url)
-                .addHeader("x-goog-api-key", keys[idx])
-                .post(body.toRequestBody("application/json".toMediaType()))
-                .build()
-
-            val call = http.newCall(request)
-            inFlight = call
-            val code: Int
-            val payload: String
-            try {
-                val response = call.execute()
-                response.use { res ->
-                    code = res.code
-                    payload = res.body?.string().orEmpty()
-                }
-            } catch (e: IOException) {
-                if (call.isCanceled()) throw TranscribeException("cancelled", e)
-                throw TranscribeException("Network error — check connection", e)
-            } catch (e: Exception) {
-                throw TranscribeException("Transcription failed", e)
-            } finally {
-                if (inFlight === call) inFlight = null
-            }
+            val (code, payload) = executeRestCall(url, keys[idx], body)
             debugLog("interactions", "HTTP $code key=$idx bytes=${payload.length}")
-            if (code == 429) {
-                if (i == keys.lastIndex) {
-                    throw TranscribeException("Rate limited on all keys — retry later")
-                }
-                continue
-            }
+            if (rotateOn429(code, i, keys.size)) continue
             if (code < 200 || code >= 300) {
                 throw TranscribeException(mapHttpError(code, payload))
             }
@@ -592,147 +611,239 @@ class LlmClient {
     }
 
     /**
-     * One Live session on a single key. Bridges the WebSocket callbacks to a
-     * coroutine and bounds the whole attempt with [LIVE_TIMEOUT_MS].
-     */
-    /**
      * One Live session on a single key over the raw socket. Bridges socket
      * callbacks to a coroutine and bounds the whole attempt with
      * [LIVE_TIMEOUT_MS].
      */
-    private fun liveAttempt(host: String, baseUrl: String, key: String, model: String, pcm: ByteArray, smartMode: Boolean = false): LiveOutcome {
+    private suspend fun liveAttempt(
+        host: String,
+        baseUrl: String,
+        key: String,
+        model: String,
+        pcm: ByteArray,
+        smartMode: Boolean = false,
+    ): LiveOutcome = coroutineScope {
         val deferred = CompletableDeferred<LiveOutcome>()
         liveResult = deferred
         val transcript = StringBuilder()
-        val lastTranscriptMs = java.util.concurrent.atomic.AtomicLong(0L)
-        fun completeDone() {
+        val lastTranscriptMs = AtomicLong(0L)
+        val raw = buildLiveAttemptSocket(host, baseUrl, key, deferred, transcript, lastTranscriptMs)
+        inFlightRaw = raw
+        connectLiveSocket(raw)?.let { return@coroutineScope it }
+        try {
+            sendLiveAudio(raw, pcm, model, smartMode, deferred)
+        } catch (e: Exception) {
+            deferred.complete(LiveOutcome.Fail("Network error — check connection", e))
+        }
+        try {
+            awaitLiveOutcome(raw, deferred, transcript, lastTranscriptMs)
+        } finally {
+            if (inFlightRaw === raw) inFlightRaw = null
+            if (liveResult === deferred) liveResult = null
+        }
+    }
+
+    /**
+     * Builds the raw socket for one attempt, wiring server callbacks to
+     * [deferred]: interim hypotheses replace the running text, finals append,
+     * turn-complete and close commit, failures map to rotate/fail outcomes.
+     */
+    private fun buildLiveAttemptSocket(
+        host: String,
+        baseUrl: String,
+        key: String,
+        deferred: CompletableDeferred<LiveOutcome>,
+        transcript: StringBuilder,
+        lastTranscriptMs: AtomicLong,
+    ): LiveSocket {
+        val attempt = LiveAttemptCallbacks(deferred, transcript, lastTranscriptMs)
+        return LiveSocket(
+            host = host,
+            path = livePath(baseUrl, key),
+            onText = { text -> attempt.onText(text) },
+            onClosed = { _, _ -> attempt.completeDone(closeSocket = false) },
+            onFailure = { t -> deferred.complete(attempt.mapFailure(t)) },
+            log = ::debugLog,
+        )
+    }
+
+    /**
+     * Attempt-scoped callback state: accumulates interim/final transcript
+     * text and maps socket events to attempt outcomes. Lambdas stay thin so
+     * the builder keeps its shape.
+     */
+    private inner class LiveAttemptCallbacks(
+        private val deferred: CompletableDeferred<LiveOutcome>,
+        private val transcript: StringBuilder,
+        private val lastTranscriptMs: AtomicLong,
+    ) {
+        fun onText(text: String) {
+            val fragments = parseLiveInputTranscripts(text)
+            if (fragments.isNotEmpty()) {
+                if (hasLiveFinalTranscript(text)) {
+                    // Final turn text: append (multiple turns accumulate).
+                    for (fragment in fragments) transcript.append(fragment)
+                } else {
+                    // Interim hypothesis repeats the full text so far:
+                    // replace, never append, or one sentence becomes three.
+                    transcript.setLength(0)
+                    for (fragment in fragments) transcript.append(fragment)
+                }
+                lastTranscriptMs.set(System.currentTimeMillis())
+            }
+            if (isLiveTurnComplete(text)) completeDone(closeSocket = true)
+        }
+
+        fun completeDone(closeSocket: Boolean) {
+            if (closeSocket) inFlightRaw?.close(1000, "")
             val text = transcript.toString().trim()
             deferred.complete(
                 if (text.isEmpty()) LiveOutcome.Fail("empty")
                 else LiveOutcome.Done(text),
             )
         }
-        val raw = LiveSocket(
-            host = host,
-            path = livePath(baseUrl, key),
-            onText = { text ->
-                val fragments = parseLiveInputTranscripts(text)
-                if (fragments.isNotEmpty()) {
-                    if (hasLiveFinalTranscript(text)) {
-                        // Final turn text: append (multiple turns accumulate).
-                        for (fragment in fragments) transcript.append(fragment)
-                    } else {
-                        // Interim hypothesis repeats the full text so far:
-                        // replace, never append, or one sentence becomes three.
-                        transcript.setLength(0)
-                        for (fragment in fragments) transcript.append(fragment)
-                    }
-                    lastTranscriptMs.set(System.currentTimeMillis())
-                }
-                if (isLiveTurnComplete(text)) {
-                    inFlightRaw?.close(1000, "")
-                    completeDone()
-                }
-            },
-            onClosed = { _, _ -> completeDone() },
-            onFailure = { t ->
-                val message = t.message.orEmpty()
-                val outcome = when {
-                    message.contains("Rate limited") -> LiveOutcome.Rotate
-                    message.startsWith("Check API key") ||
-                        message.startsWith("Server error (HTTP") -> LiveOutcome.Fail(message, t)
-                    else -> LiveOutcome.Fail("Network error — check connection", t)
-                }
-                deferred.complete(outcome)
-            },
-            log = ::debugLog,
-        )
-        inFlightRaw = raw
+
+        fun mapFailure(t: Throwable): LiveOutcome {
+            val message = t.message.orEmpty()
+            return when {
+                message.contains("Rate limited") -> LiveOutcome.Rotate
+                message.startsWith("Check API key") ||
+                    message.startsWith("Server error (HTTP") -> LiveOutcome.Fail(message, t)
+                else -> LiveOutcome.Fail("Network error — check connection", t)
+            }
+        }
+    }
+
+    /**
+     * Blocking connect on Dispatchers.IO (client enforces its own dispatcher).
+     * Returns null when connected; otherwise the terminal outcome so the
+     * caller can return early. Cancellation is never converted.
+     */
+    private suspend fun connectLiveSocket(raw: LiveSocket): LiveOutcome? {
         try {
-            raw.connect()
+            withContext(Dispatchers.IO) { raw.connect() }
         } catch (e: LiveSocketException) {
             val message = e.message.orEmpty()
             return when {
                 message.contains("Rate limited") -> LiveOutcome.Rotate
                 else -> LiveOutcome.Fail(if (message.isEmpty()) "Network error — check connection" else message, e)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             return LiveOutcome.Fail("Network error — check connection", e)
         }
-        try {
-            if (!raw.send(buildLiveSetupJson(model, smartMode))) {
-                return LiveOutcome.Fail("Network error — check connection")
-            }
-            if (!raw.send(buildLiveActivityStartJson())) {
-                return LiveOutcome.Fail("Network error — check connection")
-            }
-            var offset = 0
-            while (offset < pcm.size) {
-                if (deferred.isCompleted) break
-                val end = minOf(offset + LIVE_CHUNK_BYTES, pcm.size)
-                if (!raw.send(buildLiveAudioMessage(pcm.copyOfRange(offset, end)))) {
-                    deferred.complete(LiveOutcome.Fail("Network error — check connection"))
-                    break
-                }
-                offset = end
-            }
-            if (!deferred.isCompleted) raw.send(buildLiveActivityEndJson())
-            if (!deferred.isCompleted) raw.send(buildLiveAudioEndJson())
-        } catch (e: Exception) {
-            deferred.complete(LiveOutcome.Fail("Network error — check connection", e))
-        }
-        // Grace closer: the server often keeps the turn open after the last
-        // interim (no turnComplete). If transcript arrived but nothing new
-        // comes for GRACE_MS, close the socket ourselves — onClosed commits
-        // whatever was heard instead of hanging until LIVE_TIMEOUT_MS.
-        val graceJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-            while (true) {
-                delay(LIVE_GRACE_MS)
-                val last = lastTranscriptMs.get()
-                val idleFor = System.currentTimeMillis() - last
-                if (last > 0L && idleFor >= LIVE_GRACE_MS && !deferred.isCompleted) {
-                    try {
-                        raw.close(1000, "grace")
-                    } catch (e: Exception) {
-                        // Socket already gone; onClosed/failure will settle it.
-                    }
-                    return@launch
-                }
-            }
-        }
+        return null
+    }
+
+    /**
+     * Awaits the attempt outcome bounded by [LIVE_TIMEOUT_MS]: starts the
+     * grace-closer child (which closes the socket when interim text goes
+     * quiet instead of hanging), then awaits the callback-settled deferred.
+     * A timed-out attempt with interim text still commits the words heard.
+     * Closes the socket on cancellation and rethrows — never converts.
+     */
+    private suspend fun CoroutineScope.awaitLiveOutcome(
+        raw: LiveSocket,
+        deferred: CompletableDeferred<LiveOutcome>,
+        transcript: StringBuilder,
+        lastTranscriptMs: AtomicLong,
+    ): LiveOutcome {
+        val graceJob = launchGraceCloser(raw, deferred, lastTranscriptMs)
         try {
             return try {
-                runBlocking(Dispatchers.IO) {
-                    withTimeout(LIVE_TIMEOUT_MS) { deferred.await() }
-                }
+                withTimeout(LIVE_TIMEOUT_MS) { deferred.await() }
             } catch (e: TimeoutCancellationException) {
                 // Server never finalized the turn: if interim text arrived,
                 // commit it instead of failing — the words were heard.
                 val interim = transcript.toString().trim()
                 raw.close(1000, "timeout")
                 if (interim.isNotEmpty()) {
-                    return LiveOutcome.Done(interim)
+                    LiveOutcome.Done(interim)
+                } else {
+                    throw TranscribeException("Timed out — try again", e)
                 }
-                throw TranscribeException("Timed out — try again", e)
             } catch (e: TranscribeException) {
                 throw e
             } catch (e: CancellationException) {
-                throw TranscribeException("cancelled", e)
+                // Close the socket so no late callback settles the deferred,
+                // then rethrow — cancellation must propagate, never convert.
+                try {
+                    raw.close(1000, "cancel")
+                } catch (_: Exception) {
+                    // Already closed; nothing to do.
+                }
+                throw e
             }
         } finally {
-            try {
-                graceJob.cancel()
-            } catch (e: Exception) {
-                // Watcher already done; nothing to do.
-            }
+            graceJob.cancel()
             try {
                 raw.close(1000, "")
             } catch (e: Exception) {
                 // Already closed; nothing to do.
             }
-            if (inFlightRaw === raw) inFlightRaw = null
-            if (liveResult === deferred) liveResult = null
         }
+    }
+
+    /**
+     * Grace closer child: the server often keeps the turn open after the last
+     * interim (no turnComplete). If transcript arrived but nothing new comes
+     * for GRACE_MS, closes the socket — onClosed commits whatever was heard
+     * instead of hanging until LIVE_TIMEOUT_MS.
+     */
+    private fun CoroutineScope.launchGraceCloser(
+        raw: LiveSocket,
+        deferred: CompletableDeferred<LiveOutcome>,
+        lastTranscriptMs: AtomicLong,
+    ): Job = launch {
+        while (true) {
+            delay(LIVE_GRACE_MS)
+            val last = lastTranscriptMs.get()
+            if (last > 0L && System.currentTimeMillis() - last >= LIVE_GRACE_MS &&
+                !deferred.isCompleted
+            ) {
+                try {
+                    raw.close(1000, "grace")
+                } catch (e: Exception) {
+                    // Socket already gone; onClosed/failure will settle it.
+                }
+                return@launch
+            }
+        }
+    }
+
+    /**
+     * Streams setup + activity-start + PCM chunks + end markers over [raw].
+     * Settles [deferred] on transport failure; the caller's outcome logic
+     * decides what the result means.
+     */
+    private fun sendLiveAudio(
+        raw: LiveSocket,
+        pcm: ByteArray,
+        model: String,
+        smartMode: Boolean,
+        deferred: CompletableDeferred<LiveOutcome>,
+    ) {
+        if (!raw.send(buildLiveSetupJson(model, smartMode))) {
+            deferred.complete(LiveOutcome.Fail("Network error — check connection"))
+            return
+        }
+        if (!raw.send(buildLiveActivityStartJson())) {
+            deferred.complete(LiveOutcome.Fail("Network error — check connection"))
+            return
+        }
+        var offset = 0
+        while (offset < pcm.size) {
+            if (deferred.isCompleted) break
+            val end = minOf(offset + LIVE_CHUNK_BYTES, pcm.size)
+            if (!raw.send(buildLiveAudioMessage(pcm.copyOfRange(offset, end)))) {
+                deferred.complete(LiveOutcome.Fail("Network error — check connection"))
+                break
+            }
+            offset = end
+        }
+        if (!deferred.isCompleted) raw.send(buildLiveActivityEndJson())
+        if (!deferred.isCompleted) raw.send(buildLiveAudioEndJson())
     }
 
     /** One Live key attempt: success, rotate on 429, or fail with a user-safe message. */

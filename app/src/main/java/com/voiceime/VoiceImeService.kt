@@ -711,9 +711,7 @@ class VoiceImeService : InputMethodService() {
             var usedIndex: Int? = null
             var failure: String? = null
             try {
-                val result = withContext(Dispatchers.IO) {
-                    llm.transcribe(wav, apiKeys, baseUrl, model, start, customPrompt, smartMode)
-                }
+                val result = llm.transcribe(wav, apiKeys, baseUrl, model, start, customPrompt, smartMode)
                 transcript = result.first
                 usedIndex = result.second
             } catch (e: TranscribeException) {
@@ -753,9 +751,7 @@ class VoiceImeService : InputMethodService() {
             var usedIndex: Int? = null
             var failure: String? = null
             try {
-                val result = withContext(Dispatchers.IO) {
-                    llm.transcribe(wav, apiKeys, baseUrl, model, start, customPrompt, smartMode)
-                }
+                val result = llm.transcribe(wav, apiKeys, baseUrl, model, start, customPrompt, smartMode)
                 transcript = result.first
                 usedIndex = result.second
             } catch (e: TranscribeException) {

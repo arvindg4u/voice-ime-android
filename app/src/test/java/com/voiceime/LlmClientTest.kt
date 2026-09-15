@@ -2,6 +2,11 @@ package com.voiceime
 
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -151,7 +156,7 @@ class LlmClientTest {
     }
 
     @Test
-    fun `transcribe success returns transcript and used index`() {
+    fun `transcribe success returns transcript and used index`() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse().setResponseCode(200).setBody(geminiBody))
         server.start()
@@ -173,7 +178,7 @@ class LlmClientTest {
     }
 
     @Test
-    fun `transcribe rotates to next key on 429`() {
+    fun `transcribe rotates to next key on 429`() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse().setResponseCode(429))
         server.enqueue(MockResponse().setResponseCode(200).setBody(geminiBody))
@@ -197,7 +202,7 @@ class LlmClientTest {
     }
 
     @Test
-    fun `transcribe all 429 throws rate-all message`() {
+    fun `transcribe all 429 throws rate-all message`() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse().setResponseCode(429))
         server.enqueue(MockResponse().setResponseCode(429))
@@ -221,7 +226,7 @@ class LlmClientTest {
     }
 
     @Test
-    fun `transcribe 401 fails immediately without rotation`() {
+    fun `transcribe 401 fails immediately without rotation`() = runBlocking {
         val server = MockWebServer()
         server.enqueue(
             MockResponse().setResponseCode(401)
@@ -247,7 +252,7 @@ class LlmClientTest {
     }
 
     @Test
-    fun `transcribe empty keys throws no-key message`() {
+    fun `transcribe empty keys throws no-key message`() = runBlocking {
         try {
             client.transcribe(byteArrayOf(1), listOf("  ", ""), "http://x/", "m")
             fail("expected TranscribeException")
@@ -257,7 +262,7 @@ class LlmClientTest {
     }
 
     @Test
-    fun `transcribe startIndex wraps try order`() {
+    fun `transcribe startIndex wraps try order`() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse().setResponseCode(200).setBody(geminiBody))
         server.start()
@@ -622,6 +627,29 @@ class LlmClientTest {
         val acc = FinalAccumulator()
         assertEquals("", acc.append(""))
         assertEquals("", acc.snapshot())
+    }
+
+    @Test
+    fun `cancelling transcribe throws CancellationException, not TranscribeException`() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBodyDelay(10, TimeUnit.SECONDS).setBody("{}"))
+        server.start()
+        val url = server.url("/v1beta").toString().removeSuffix("/")
+        val job = async(Dispatchers.IO) {
+            client.transcribe(wavBytes(), listOf("k"), url, "gemini-2.5-flash")
+        }
+        delay(500)
+        job.cancel()
+        try {
+            job.await()
+            fail("expected CancellationException")
+        } catch (e: CancellationException) {
+            // Correct: structured cancellation propagates.
+        } catch (e: TranscribeException) {
+            fail("cancellation was converted to TranscribeException: ${e.message}")
+        } finally {
+            server.shutdown()
+        }
     }
 
     @Test

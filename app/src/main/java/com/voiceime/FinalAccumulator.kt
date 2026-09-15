@@ -7,6 +7,9 @@ package com.voiceime
  * duplicating, disjoint fragments append, and exact echoes yield "" (the
  * caller skips onFinal but still completes its signal). Pure,
  * framework-free, JVM-testable.
+ *
+ * Not thread-safe; call only from the socket-callback thread. Appends are
+ * O(n^2) worst-case (suffix scan per append) — fine for short transcripts.
  */
 internal class FinalAccumulator {
     private val text = StringBuilder()

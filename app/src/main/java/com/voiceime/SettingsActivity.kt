@@ -115,13 +115,11 @@ class SettingsActivity : AppCompatActivity() {
         testButton.isEnabled = false
         lifecycleScope.launch {
             val message = try {
-                val (transcript, usedIndex) = withContext(Dispatchers.IO) {
-                    llm.transcribe(
-                        AudioRecorder.testToneWav(), keys, url, model,
-                        customPrompt = customPrompt,
-                        smartMode = settings.smartMode,
-                    )
-                }
+                val (transcript, usedIndex) = llm.transcribe(
+                    AudioRecorder.testToneWav(), keys, url, model,
+                    customPrompt = customPrompt,
+                    smartMode = settings.smartMode,
+                )
                 "${transcript.take(100)} (key ${usedIndex + 1}/${keys.size})"
             } catch (e: TranscribeException) {
                 e.message.orEmpty()
