@@ -645,13 +645,10 @@ class VoiceImeService : InputMethodService() {
             }
     }
 
-    /** Tears down the live capture side and reports the captured peak. */
-    private suspend fun beginLiveCommit(rec: AudioRecorder?): Pair<Float, LlmClient.LiveSession?> {
-        val peak = stopLiveRecorder(rec)
-        val session = liveStreamingSession
-        liveStreamingSession = null
-        return peak to session
-    }
+    /** Stops the recorder and reports the captured peak. Only suspension in
+     * the commit prologue is the recorder join inside; the session was
+     * captured synchronously by the caller and is used from the closure. */
+    private suspend fun beginLiveCommit(rec: AudioRecorder?): Float = stopLiveRecorder(rec)
 
     /** Cancels without committing: closes the session and returns to idle. */
     private fun abortLiveCommit(session: LlmClient.LiveSession?) {
@@ -669,12 +666,16 @@ class VoiceImeService : InputMethodService() {
         stopTimer()
         val rec = recorder
         recorder = null
+        val session = liveStreamingSession
+        liveStreamingSession = null
         state = State.UPLOADING
         renderState()
         statusText?.setText(R.string.ime_status_uploading)
         liveCommitJob?.cancel()
         liveCommitJob = serviceScope.launch {
-            val (peak, session) = beginLiveCommit(rec)
+            // session was captured synchronously above; only the recorder
+            // join suspends below — the field is never re-read after it.
+            val peak = beginLiveCommit(rec)
             if (!upload) {
                 abortLiveCommit(session)
                 return@launch
