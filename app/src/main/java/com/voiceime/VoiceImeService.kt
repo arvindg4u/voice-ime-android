@@ -119,7 +119,7 @@ class VoiceImeService : InputMethodService() {
     private var clipBadge: Button? = null
     private var clipEntries: List<ClipboardEntry> = emptyList()
     private var clipListener: ClipboardManager.OnPrimaryClipChangedListener? = null
-    private var lastClipFingerprint: Int = 0
+    private var lastClipFingerprint: String = ""
     private var clipPopup: PopupWindow? = null
 
     private var state: State = State.IDLE

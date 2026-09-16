@@ -4,8 +4,10 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.View
+import androidx.annotation.MainThread
 
 /**
  * Live amplitude waveform: 48 symmetric rounded bars around a center line.
@@ -58,13 +60,16 @@ class WaveformView @JvmOverloads constructor(
     }
 
     /** Push a 0..1 amplitude; invalidates at most ~30fps and only on change > 0.02. */
+    @MainThread
     fun setAmplitude(amplitude: Float) {
         val clamped = amplitude.coerceIn(0f, 1f)
         // Any chunk means a live recorder, even a throttled-out one: stop the
         // idle pulse so recording never runs two frame loops at once. reset()
         // (the service's idle signal) restarts it.
         idle = false
-        val now = System.currentTimeMillis()
+        // Monotonic clock: wall-clock jumps (NTP/timezone) must not stall or
+        // burst the 30fps throttle.
+        val now = SystemClock.uptimeMillis()
         if (kotlin.math.abs(clamped - lastAmplitude) < INVALIDATE_THRESHOLD) return
         if (now - lastInvalidateMs < MIN_INVALIDATE_INTERVAL_MS) return
         lastAmplitude = clamped
@@ -72,15 +77,16 @@ class WaveformView @JvmOverloads constructor(
         // Shift ring left and append; newest level drives the rightmost bar.
         System.arraycopy(levels, 1, levels, 0, BAR_COUNT - 1)
         levels[BAR_COUNT - 1] = clamped
-        invalidate()
+        postInvalidate()
     }
 
     /** Clear the ring back to baseline. */
+    @MainThread
     fun reset() {
         levels.fill(0f)
         lastAmplitude = 0f
         idle = true
-        invalidate()
+        postInvalidate()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {

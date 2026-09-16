@@ -71,6 +71,7 @@
     <string name="clipboard_chip_count">\u29C9 %1$d</string>
     <string name="clipboard_empty_title">No saved clips yet</string>
     <string name="clipboard_empty_hint">Copied text will appear here</string>
+    <string name="clipboard_no_matches">No matches for “%1$s”</string>
     <string name="clipboard_pinned">Pinned</string>
     <string name="clipboard_unpinned">Unpinned</string>
     <string name="clipboard_too_large">Clip too large — not saved</string>

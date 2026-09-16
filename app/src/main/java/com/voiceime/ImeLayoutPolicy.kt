@@ -50,7 +50,7 @@ object ImeLayoutPolicy {
     ): Int {
         val base = baseHeightPx.coerceAtLeast(1)
         if (inputViewHeightPx <= 0) return base
-        return minOf(base, (inputViewHeightPx * fraction).toInt().coerceAtLeast(1))
+        return minOf(base, (inputViewHeightPx * fraction.coerceIn(0f, 1f)).toInt().coerceAtLeast(1))
     }
 
     /** Content-strip width: fill what is available, capped at the max width. */
@@ -93,7 +93,7 @@ object ImeLayoutPolicy {
         if (viewWidthPx <= 0f || barCount <= 0) return BarGeometry(0f, 0f, 0f)
         val naturalSlot = viewWidthPx / barCount
         val slotW = minOf(naturalSlot, maxBarPx.coerceAtLeast(1f))
-        val barW = (slotW * widthFraction).coerceAtLeast(1f)
+        val barW = (slotW * widthFraction.coerceIn(0f, 1f)).coerceAtLeast(1f)
         val startX = ((viewWidthPx - slotW * barCount) / 2f).coerceAtLeast(0f)
         return BarGeometry(slotW, barW, startX)
     }

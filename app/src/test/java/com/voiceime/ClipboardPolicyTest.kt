@@ -183,4 +183,23 @@ class ClipboardPolicyTest {
     fun `max commit chars is 32k`() {
         assertEquals(32 * 1024, ClipboardPolicy.MAX_COMMIT_CHARS)
     }
+
+    @Test
+    fun `clipFingerprint returns stable string key`() {
+        val a: String = ClipboardPolicy.clipFingerprint("label", "text", "text/plain")
+        val b: String = ClipboardPolicy.clipFingerprint("label", "text", "text/plain")
+        assertEquals(a, b)
+    }
+
+    @Test
+    fun `clipFingerprint distinguishes different inputs`() {
+        val a: String = ClipboardPolicy.clipFingerprint("label", "text one", "text/plain")
+        val b: String = ClipboardPolicy.clipFingerprint("label", "text two", "text/plain")
+        assertTrue(a != b)
+    }
+
+    @Test
+    fun `clipFingerprint handles nulls without crashing`() {
+        ClipboardPolicy.clipFingerprint(null, null, null)
+    }
 }

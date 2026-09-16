@@ -143,10 +143,13 @@ object ClipboardPolicy {
         }
     }
 
+    /** Hoisted whitespace matcher so previews never recompile a regex per call. */
+    private val WHITESPACE = Regex("\\s+")
+
     /** Single-line 64-char preview; sensitive entries show a bullet mask. */
     fun sanitizePreview(entry: ClipboardEntry): String {
         if (entry.isSensitive) return "••••••••"
-        val singleLine = entry.text.replace(Regex("\\s+"), " ").trim()
+        val singleLine = entry.text.replace(WHITESPACE, " ").trim()
         return if (singleLine.length > PREVIEW_CHARS) {
             singleLine.take(PREVIEW_CHARS)
         } else {
@@ -155,11 +158,6 @@ object ClipboardPolicy {
     }
 
     /** Stable dedupe key for the primary-clip listener: label + text + mime. */
-    fun clipFingerprint(label: CharSequence?, text: CharSequence?, mimeType: String?): Int {
-        var h = 17
-        h = 31 * h + (label?.toString()?.hashCode() ?: 0)
-        h = 31 * h + (text?.toString()?.hashCode() ?: 0)
-        h = 31 * h + (mimeType?.hashCode() ?: 0)
-        return h
-    }
+    fun clipFingerprint(label: CharSequence?, text: CharSequence?, mimeType: String?): String =
+        "${label?.toString().orEmpty()}|${text?.toString().orEmpty()}|${mimeType.orEmpty()}"
 }

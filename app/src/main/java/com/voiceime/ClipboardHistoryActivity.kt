@@ -4,6 +4,7 @@ import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.res.ColorStateList
 import android.os.Build
 import android.os.Bundle
 import android.text.Editable
@@ -21,6 +22,7 @@ import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.materialswitch.MaterialSwitch
 import kotlinx.coroutines.CoroutineScope
@@ -86,7 +88,7 @@ class ClipboardHistoryActivity : AppCompatActivity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
             override fun afterTextChanged(s: Editable?) {
-                adapter.filter.filter(s?.toString().orEmpty())
+                adapter.setQuery(s?.toString().orEmpty())
             }
         })
 
@@ -122,13 +124,27 @@ class ClipboardHistoryActivity : AppCompatActivity() {
         }
     }
 
-    /** Shows the teaching empty state when the visible list is empty. */
+    /**
+     * Empty-state driver (also called from the adapter's publishResults,
+     * which runs on the UI thread): teaching view when the store is empty,
+     * "no matches" when a search filter hides everything.
+     */
     private fun updateEmptyState() {
         val empty = adapter.isEmpty
         findViewById<View>(R.id.clipEmpty)?.visibility =
             if (empty) View.VISIBLE else View.GONE
         findViewById<ListView>(R.id.clipList)?.visibility =
             if (empty) View.GONE else View.VISIBLE
+        if (!empty) return
+        val title = findViewById<TextView>(R.id.clipEmptyTitle) ?: return
+        val hint = findViewById<TextView>(R.id.clipEmptyHint) ?: return
+        if (adapter.isStoreEmpty) {
+            title.setText(R.string.clipboard_empty_title)
+            hint.setText(R.string.clipboard_empty_hint)
+        } else {
+            title.text = getString(R.string.clipboard_no_matches, adapter.currentQuery)
+            hint.text = ""
+        }
     }
 
     override fun onDestroy() {
@@ -184,25 +200,55 @@ class ClipboardHistoryActivity : AppCompatActivity() {
                 .getLong(KEY_TTL_MS, ClipboardPolicy.DEFAULT_TTL_MS)
     }
 
-    private class EntryAdapter(
+    private class ViewHolder(view: View) {
+        val clipText: TextView = view.findViewById(R.id.clipText)
+        val clipState: TextView = view.findViewById(R.id.clipState)
+        val pin: ImageButton = view.findViewById(R.id.clipPin)
+        val delete: ImageButton = view.findViewById(R.id.clipDelete)
+    }
+
+    private inner class EntryAdapter(
         private val context: Context,
         private val onTap: (ClipboardEntry) -> Unit,
         private val onPin: (ClipboardEntry) -> Unit,
         private val onDelete: (ClipboardEntry) -> Unit,
     ) : BaseAdapter(), Filterable {
 
+        @Volatile
         private var all: List<ClipboardEntry> = emptyList()
         private var shown: List<ClipboardEntry> = emptyList()
         private val inflater = LayoutInflater.from(context)
 
+        // Resolved once — per-bind getColor/ColorStateList churn showed up in
+        // scroll traces on low-end devices.
+        private val pinnedTint = ColorStateList.valueOf(
+            ContextCompat.getColor(context, R.color.ime_accent),
+        )
+        private val unpinnedTint = ColorStateList.valueOf(
+            ContextCompat.getColor(context, android.R.color.darker_gray),
+        )
+        private val pinnedLabel = context.getString(R.string.clipboard_pinned)
+        private val unpinnedLabel = context.getString(R.string.clipboard_unpinned)
+        private val pinHint = context.getString(R.string.clipboard_pin)
+        private val unpinHint = context.getString(R.string.clipboard_unpin)
+
+        /** Latest search text; UI thread only — never touched from the filter worker. */
+        var currentQuery: String = ""
+            private set
+
+        /** True when the backing store holds nothing (vs. a filter hiding everything). */
+        val isStoreEmpty: Boolean
+            get() = all.isEmpty()
+
         fun setEntries(entries: List<ClipboardEntry>) {
             all = entries
-            shown = entries
-            filter.filter(currentQuery)
-            notifyDataSetChanged()
+            entryFilter.filter(currentQuery)
         }
 
-        private var currentQuery: String = ""
+        fun setQuery(query: String) {
+            currentQuery = query
+            entryFilter.filter(query)
+        }
 
         override fun getCount(): Int = shown.size
         override fun getItem(position: Int): ClipboardEntry = shown[position]
@@ -211,38 +257,32 @@ class ClipboardHistoryActivity : AppCompatActivity() {
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
             val view = convertView
                 ?: inflater.inflate(R.layout.item_clipboard_entry, parent, false)
+            val holder = (view.tag as? ViewHolder) ?: ViewHolder(view).also { view.tag = it }
             val entry = getItem(position)
-            view.findViewById<TextView>(R.id.clipText).text = ClipboardPolicy.sanitizePreview(entry)
-            view.findViewById<TextView>(R.id.clipState).text = if (entry.isPinned) {
-                context.getString(R.string.clipboard_pinned)
-            } else {
-                context.getString(R.string.clipboard_unpinned)
-            }
-            val pin = view.findViewById<ImageButton>(R.id.clipPin)
-            pin.contentDescription = if (entry.isPinned) {
-                context.getString(R.string.clipboard_unpin)
-            } else {
-                context.getString(R.string.clipboard_pin)
-            }
+            holder.clipText.text = ClipboardPolicy.sanitizePreview(entry)
+            holder.clipState.text = if (entry.isPinned) pinnedLabel else unpinnedLabel
+            holder.pin.contentDescription = if (entry.isPinned) unpinHint else pinHint
             // Pinned rows glow with the dynamic accent; unpinned stay neutral.
-            pin.imageTintList = android.content.res.ColorStateList.valueOf(
-                if (entry.isPinned) {
-                    androidx.core.content.ContextCompat.getColor(context, R.color.ime_accent)
-                } else {
-                    androidx.core.content.ContextCompat.getColor(context, android.R.color.darker_gray)
-                },
-            )
-            pin.setOnClickListener { onPin(entry) }
-            view.findViewById<ImageButton>(R.id.clipDelete).setOnClickListener { onDelete(entry) }
+            holder.pin.imageTintList = if (entry.isPinned) pinnedTint else unpinnedTint
+            holder.pin.setOnClickListener { onPin(entry) }
+            holder.delete.setOnClickListener { onDelete(entry) }
             view.setOnClickListener { onTap(entry) }
             return view
         }
 
-        override fun getFilter(): Filter = object : Filter() {
+        override fun getFilter(): Filter = entryFilter
+
+        // Single instance so requests serialize: overlapping setEntries/setQuery
+        // calls cannot interleave worker passes.
+        private val entryFilter = object : Filter() {
             override fun performFiltering(constraint: CharSequence?): FilterResults {
-                currentQuery = constraint?.toString().orEmpty()
-                val q = currentQuery.trim()
-                val result = if (q.isEmpty()) all else all.filter { it.text.contains(q, ignoreCase = true) }
+                val snapshot = all
+                val q = constraint?.toString().orEmpty().trim()
+                val result = if (q.isEmpty()) {
+                    snapshot
+                } else {
+                    snapshot.filter { it.text.contains(q, ignoreCase = true) }
+                }
                 return FilterResults().apply {
                     values = result
                     count = result.size
@@ -253,6 +293,7 @@ class ClipboardHistoryActivity : AppCompatActivity() {
             override fun publishResults(constraint: CharSequence?, results: FilterResults?) {
                 shown = (results?.values as? List<ClipboardEntry>) ?: all
                 notifyDataSetChanged()
+                updateEmptyState()
             }
         }
     }
