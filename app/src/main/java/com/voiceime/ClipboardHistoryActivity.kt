@@ -52,14 +52,14 @@ class ClipboardHistoryActivity : AppCompatActivity() {
             onTap = { entry -> commitEntry(entry) },
             onPin = { entry ->
                 scope.launch {
-                    val updated = withContext(Dispatchers.IO) { store.togglePin(entry.id) }
+                    val updated = store.togglePinAsync(entry.id)
                     adapter.setEntries(updated)
                     updateEmptyState()
                 }
             },
             onDelete = { entry ->
                 scope.launch {
-                    val updated = withContext(Dispatchers.IO) { store.deleteAt(entry.id) }
+                    val updated = store.deleteAtAsync(entry.id)
                     adapter.setEntries(updated)
                     updateEmptyState()
                 }
@@ -75,7 +75,7 @@ class ClipboardHistoryActivity : AppCompatActivity() {
                 withContext(Dispatchers.IO) {
                     setClipboardEnabled(this@ClipboardHistoryActivity, checked)
                     // The helper constructs its own store instance, so sync this screen's in-memory snapshot.
-                    store.setEnabled(checked)
+                    store.setEnabledAsync(checked)
                 }
                 adapter.setEntries(store.snapshot())
                 updateEmptyState()
@@ -93,7 +93,7 @@ class ClipboardHistoryActivity : AppCompatActivity() {
         updateEmptyState()
         findViewById<MaterialButton>(R.id.clipClearUnpinned).setOnClickListener {
             scope.launch {
-                val updated = withContext(Dispatchers.IO) { store.clearUnpinned() }
+                val updated = store.clearUnpinnedAsync()
                 adapter.setEntries(updated)
                 updateEmptyState()
             }
@@ -103,7 +103,7 @@ class ClipboardHistoryActivity : AppCompatActivity() {
                 .setMessage(R.string.clipboard_clear_all_confirm)
                 .setPositiveButton(android.R.string.ok) { _, _ ->
                     scope.launch {
-                        withContext(Dispatchers.IO) { store.clearAll() }
+                        store.clearAllAsync()
                         adapter.setEntries(store.snapshot())
                         updateEmptyState()
                     }

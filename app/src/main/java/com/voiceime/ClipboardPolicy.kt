@@ -41,6 +41,8 @@ object ClipboardPolicy {
 
     fun clampMaxUnpinned(raw: Int): Int = raw.coerceIn(MIN_MAX_UNPINNED, MAX_MAX_UNPINNED)
 
+    fun clampMaxPinned(raw: Int): Int = raw.coerceAtLeast(0)
+
     fun isPasswordInputType(inputType: Int): Boolean {
         val cls = inputType and InputType.TYPE_MASK_CLASS
         if (cls != InputType.TYPE_CLASS_TEXT && cls != InputType.TYPE_CLASS_NUMBER) return false

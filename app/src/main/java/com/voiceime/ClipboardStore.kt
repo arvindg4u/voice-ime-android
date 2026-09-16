@@ -70,6 +70,9 @@ class ClipboardStore private constructor(
             field = ClipboardPolicy.clampMaxUnpinned(value)
         }
     var maxPinned: Int = ClipboardPolicy.DEFAULT_MAX_PINNED
+        set(value) {
+            field = ClipboardPolicy.clampMaxPinned(value)
+        }
     var ttlMs: Long = ClipboardPolicy.DEFAULT_TTL_MS
     var enabled: Boolean = false
 
@@ -82,6 +85,10 @@ class ClipboardStore private constructor(
         val pruned = ClipboardPolicy.prune(loaded, nowMs, maxUnpinned, maxPinned, ttlMs)
         entries.clear()
         entries.addAll(pruned)
+        // Read-now-writes is intentional: when prune dropped entries the file
+        // on disk still holds the unpruned payload, so persist the pruned
+        // snapshot to bound file growth.
+        if (pruned.size != loaded.size) persist()
         return@synchronized snapshot()
     }
 
@@ -149,7 +156,7 @@ class ClipboardStore private constructor(
         }
     }
 
-    private fun persist() {
+    private fun persist(): Boolean {
         val array = JSONArray()
         for (entry in entries) {
             array.put(
@@ -174,7 +181,7 @@ class ClipboardStore private constructor(
             crypto.seal(array.toString().toByteArray(Charsets.UTF_8))
         } catch (e: Exception) {
             if (BuildConfig.DEBUG) android.util.Log.w(TAG, "history seal failed; write skipped")
-            return
+            return false
         }
         try {
             // Swap-write then atomic rename; keep last-good .bak first.
@@ -194,11 +201,14 @@ class ClipboardStore private constructor(
             if (backup.exists() && !isSealed(backup.readBytes())) {
                 backup.delete()
             }
+            return true
         } catch (e: Exception) {
+            if (BuildConfig.DEBUG) android.util.Log.w(TAG, "history persist failed; write skipped")
             try {
                 swap.delete()
             } catch (ignored: Exception) {
             }
+            return false
         }
     }
 
@@ -241,7 +251,7 @@ class ClipboardStore private constructor(
                     ClipboardEntry(
                         id = obj.optString("id", "").ifEmpty { java.util.UUID.randomUUID().toString() },
                         text = text,
-                        createdAtMs = obj.optLong("createdAtMs", System.currentTimeMillis()),
+                        createdAtMs = obj.optLong("createdAtMs", 0L),
                         isPinned = obj.optBoolean("isPinned", false),
                         isSensitive = obj.optBoolean("isSensitive", false),
                         mimeType = obj.optString("mimeType", "text/plain").ifEmpty { "text/plain" },
@@ -269,7 +279,7 @@ class ClipboardStore private constructor(
         }
     }
 
-    private fun deleteFiles() {
+    private fun deleteFiles(): Boolean {
         try {
             primary.delete()
         } catch (e: Exception) {
@@ -289,6 +299,7 @@ class ClipboardStore private constructor(
             if (scratch.exists()) scratch.delete()
         } catch (e: Exception) {
         }
+        return !primary.exists() && !backup.exists() && !swap.exists()
     }
 
     /** IO convenience for UI call sites. */
@@ -300,4 +311,20 @@ class ClipboardStore private constructor(
         nowMs: Long = System.currentTimeMillis(),
         isSensitive: Boolean = false,
     ): List<ClipboardEntry> = withContext(Dispatchers.IO) { add(text, nowMs, isSensitive) }
+
+    suspend fun togglePinAsync(
+        entryId: String,
+        nowMs: Long = System.currentTimeMillis(),
+    ): List<ClipboardEntry> = withContext(Dispatchers.IO) { togglePin(entryId, nowMs) }
+
+    suspend fun deleteAtAsync(entryId: String): List<ClipboardEntry> =
+        withContext(Dispatchers.IO) { deleteAt(entryId) }
+
+    suspend fun clearUnpinnedAsync(): List<ClipboardEntry> =
+        withContext(Dispatchers.IO) { clearUnpinned() }
+
+    suspend fun clearAllAsync() = withContext(Dispatchers.IO) { clearAll() }
+
+    suspend fun setEnabledAsync(value: Boolean, nowMs: Long = System.currentTimeMillis()) =
+        withContext(Dispatchers.IO) { setEnabled(value, nowMs) }
 }
