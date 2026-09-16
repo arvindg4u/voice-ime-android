@@ -22,7 +22,11 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var apiKeyField: TextInputEditText
     private lateinit var modelField: TextInputEditText
     private lateinit var customPromptField: TextInputEditText
-    private val llm = LlmClient()
+    private val llm by lazy { LlmClient() }
+
+    companion object {
+        private val MODEL_PATTERN = Regex("^[A-Za-z0-9._-]+$")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,12 +87,21 @@ class SettingsActivity : AppCompatActivity() {
             settings.baseUrl == SettingsStore.DEFAULT_BASE_URL
         settings.apiKeys = apiKeyField.text?.toString().orEmpty()
             .split("\n").map { line -> line.trim() }.filter { line -> line.isNotEmpty() }
-        settings.model = modelField.text?.toString().orEmpty()
+        val typedModel = modelField.text?.toString().orEmpty()
+        val invalidModel = typedModel.isNotEmpty() && !MODEL_PATTERN.matches(typedModel)
+        if (!invalidModel) {
+            settings.model = typedModel
+        }
         settings.customPrompt = customPromptField.text?.toString().orEmpty()
         baseUrlField.setText(settings.baseUrl)
+        apiKeyField.setText(settings.apiKeys.joinToString("\n"))
         modelField.setText(settings.model)
+        // The customPrompt write-back IS the truncation feedback: SettingsStore
+        // caps at MAX_CUSTOM_PROMPT, so a shortened field shows what was kept.
         customPromptField.setText(settings.customPrompt)
-        if (httpsReset) {
+        if (invalidModel) {
+            Toast.makeText(this, R.string.settings_invalid_model, Toast.LENGTH_LONG).show()
+        } else if (httpsReset) {
             Toast.makeText(this, R.string.settings_https_required, Toast.LENGTH_LONG).show()
         } else {
             Toast.makeText(this, R.string.settings_saved, Toast.LENGTH_SHORT).show()

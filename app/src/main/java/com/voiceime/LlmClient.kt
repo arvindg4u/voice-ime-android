@@ -44,6 +44,7 @@ class LlmClient {
         .writeTimeout(90, TimeUnit.SECONDS)
         .build()
 
+    /** one in-flight transcription at a time — the service serializes via cancelWork() */
     @Volatile
     private var inFlight: Call? = null
 
@@ -176,6 +177,7 @@ class LlmClient {
         if (session != null && !session.isDetached()) session.close()
     }
 
+    /** one in-flight transcription at a time — the service serializes via cancelWork() */
     @Volatile
     private var liveSession: LiveSession? = null
 

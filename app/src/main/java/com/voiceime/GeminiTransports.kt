@@ -258,7 +258,7 @@ internal fun liveHost(baseUrl: String): String {
 
 /** Live RPC path with the key attached (key never logged). */
 internal fun livePath(baseUrl: String, key: String): String =
-    "$LIVE_RPC_PATH?key=$key"
+    "$LIVE_RPC_PATH?key=${java.net.URLEncoder.encode(key, "UTF-8")}"
 
 /**
  * Strips the WAV header, returning raw 16 kHz 16-bit mono PCM for the
@@ -371,7 +371,7 @@ internal fun buildGeminiRequestJson(audioB64: String, customPrompt: String = "")
 
 /** Gemini endpoint for a model: {base}/models/{model}:generateContent. */
 internal fun geminiUrl(baseUrl: String, model: String): String =
-    baseUrl.trimEnd('/') + "/models/$model:generateContent"
+    baseUrl.trimEnd('/') + "/models/${java.net.URLEncoder.encode(model, "UTF-8")}:generateContent"
 
 /**
  * Joins the text of every part of every candidate in a generateContent response.

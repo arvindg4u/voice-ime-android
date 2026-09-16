@@ -659,4 +659,25 @@ class LlmClientTest {
         assertEquals(" again", acc.append("world again"))
         assertEquals("hello world again", acc.snapshot())
     }
+
+    @Test
+    fun `livePath encodes key query parameter`() {
+        val path = livePath("https://example.com", "a&b=c?d#e")
+        assertTrue(!path.contains("&b="))
+        assertTrue(path.contains("key=a"))
+    }
+
+    @Test
+    fun `geminiUrl encodes model path segment`() {
+        val url = geminiUrl("https://example.com/v1beta", "model with spaces")
+        assertTrue(!url.contains(" "))
+    }
+
+    @Test
+    fun `geminiUrl keeps normal model untouched`() {
+        assertEquals(
+            "https://example.com/v1beta/models/gemini-2.5-flash:generateContent",
+            geminiUrl("https://example.com/v1beta", "gemini-2.5-flash"),
+        )
+    }
 }
