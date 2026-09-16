@@ -160,6 +160,7 @@ class AudioRecorder(
         try {
             am.setCommunicationDevice(dev)
         } catch (_: Exception) {
+            // Routing is best-effort; capture continues on the default device.
         }
     }
 

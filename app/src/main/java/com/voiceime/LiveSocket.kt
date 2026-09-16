@@ -2,9 +2,12 @@ package com.voiceime
 
 import java.io.ByteArrayOutputStream
 import java.io.EOFException
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.Socket
+import java.security.SecureRandom
+import java.util.Base64
 import java.util.concurrent.LinkedBlockingQueue
 import javax.net.ssl.SSLSocketFactory
 
@@ -98,8 +101,8 @@ internal class LiveSocket(
     /** Connects, handshakes, and starts the reader/writer threads. */
     @Throws(LiveSocketException::class)
     fun connect() {
-        val keyBytes = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
-        val wsKey = java.util.Base64.getEncoder().encodeToString(keyBytes)
+        val keyBytes = ByteArray(16).also { SecureRandom().nextBytes(it) }
+        val wsKey = Base64.getEncoder().encodeToString(keyBytes)
         val sock = openTlsSocket()
         val input = try {
             sock.getInputStream()
@@ -213,11 +216,7 @@ internal class LiveSocket(
 
     /** Decodes a text/binary frame and forwards it to the owner. */
     private fun deliverText(message: WsMessage) {
-        val text = try {
-            String(message.payload, Charsets.UTF_8)
-        } catch (e: Exception) {
-            return
-        }
+        val text = String(message.payload, Charsets.UTF_8)
         try {
             onText(text)
         } catch (_: Exception) {
@@ -228,7 +227,7 @@ internal class LiveSocket(
     private fun readLoop(input: InputStream) {
         try {
             while (!terminal) {
-                val message = readFrame(input) ?: return
+                val message = readFrame(input)
                 if (message.opcode == 0x8) {
                     deliverClose(message)
                     return
@@ -394,7 +393,7 @@ internal class LiveSocket(
 
     /** Reads one complete message, assembling fragmented continuation frames. */
     @Throws(EOFException::class)
-    private fun readFrame(input: InputStream): WsMessage? {
+    private fun readFrame(input: InputStream): WsMessage {
         var opcode = -1
         val assembled = ByteArrayOutputStream()
         while (true) {
@@ -458,7 +457,7 @@ internal class LiveSocket(
         }
 
         /** Encodes and writes one masked client frame to [stream]. */
-        @Throws(java.io.IOException::class)
+        @Throws(IOException::class)
         internal fun writeFrame(stream: OutputStream, opcode: Int, payload: ByteArray) {
             val frame = encodeFrame(opcode, payload)
             stream.write(frame)
@@ -466,7 +465,7 @@ internal class LiveSocket(
         }
 
         internal fun encodeFrame(opcode: Int, payload: ByteArray): ByteArray {
-            val mask = ByteArray(4).also { java.security.SecureRandom().nextBytes(it) }
+            val mask = ByteArray(4).also { SecureRandom().nextBytes(it) }
             val header = ByteArrayOutputStream()
             header.write((0x80 or (opcode and 0x0F)))
             val length = payload.size
@@ -516,4 +515,4 @@ internal class LiveSocket(
 }
 
 /** User-safe Live socket failure; message is safe to show. */
-internal class LiveSocketException(message: String, cause: Throwable? = null) : java.io.IOException(message, cause)
+internal class LiveSocketException(message: String, cause: Throwable? = null) : IOException(message, cause)

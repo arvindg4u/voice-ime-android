@@ -33,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -325,7 +326,7 @@ class VoiceImeService : InputMethodService() {
     private fun hapticConfirm() {
         try {
             val view = rootView ?: return
-            if (android.os.Build.VERSION.SDK_INT >= 30) {
+            if (Build.VERSION.SDK_INT >= 30) {
                 view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
             } else {
                 view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
@@ -397,7 +398,7 @@ class VoiceImeService : InputMethodService() {
     private fun onBackTapped() {
         hapticTap()
         val switched = try {
-            if (android.os.Build.VERSION.SDK_INT >= 28) {
+            if (Build.VERSION.SDK_INT >= 28) {
                 switchToPreviousInputMethod()
             } else {
                 false
@@ -506,7 +507,7 @@ class VoiceImeService : InputMethodService() {
     private val liveFinalParts = StringBuilder()
     private var liveLastInterim = ""
     /** Commit coroutine for the Stop flow; Cancel taps cancel this, not the socket. */
-    private var liveCommitJob: kotlinx.coroutines.Job? = null
+    private var liveCommitJob: Job? = null
     /** Guard for the session currently allowed to write live buffers. */
     private val liveGuard = LiveSessionGuard()
 
@@ -622,7 +623,7 @@ class VoiceImeService : InputMethodService() {
             false
         }
         if (!signaled) {
-            android.util.Log.d("VoiceIme", "live-commit: no final signal in 12s, committing fallback")
+            Log.d("VoiceIme", "live-commit: no final signal in 12s, committing fallback")
         }
         try {
             session?.close()
@@ -808,7 +809,7 @@ class VoiceImeService : InputMethodService() {
         val smartMode = settings.smartMode
         val start = keyCursor
         transcribeJob = serviceScope.launch {
-            if (waitMs > 0) kotlinx.coroutines.delay(waitMs)
+            if (waitMs > 0) delay(waitMs)
             var transcript: String? = null
             var usedIndex: Int? = null
             var failure: String? = null
@@ -1301,7 +1302,7 @@ class VoiceImeService : InputMethodService() {
     }
 
     private fun hasSensitiveExtra(desc: ClipDescription): Boolean {
-        if (android.os.Build.VERSION.SDK_INT < 33) return false
+        if (Build.VERSION.SDK_INT < 33) return false
         return try {
             val extras = desc.extras ?: return false
             extras.containsKey(ClipboardPolicy.EXTRA_IS_SENSITIVE)
@@ -1311,7 +1312,7 @@ class VoiceImeService : InputMethodService() {
     }
 
     private fun markClipSensitive(desc: ClipDescription) {
-        if (android.os.Build.VERSION.SDK_INT < 33) return
+        if (Build.VERSION.SDK_INT < 33) return
         try {
             val extras = desc.extras ?: PersistableBundle()
             extras.putBoolean(ClipboardPolicy.EXTRA_IS_SENSITIVE, true)

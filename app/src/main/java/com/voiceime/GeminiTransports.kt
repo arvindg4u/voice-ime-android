@@ -1,5 +1,9 @@
 package com.voiceime
 
+import java.net.URL
+import java.net.URLEncoder
+import java.util.Base64
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -54,7 +58,7 @@ internal fun normalizeKeys(apiKeys: List<String>): List<String> =
  * without an allowlist update.
  */
 internal fun requiresLive(model: String): Boolean {
-    val name = model.trim().lowercase(java.util.Locale.ROOT)
+    val name = model.trim().lowercase(Locale.ROOT)
     return name.contains("-live") ||
         name.contains("live-preview") ||
         name.contains("native-audio") ||
@@ -67,7 +71,7 @@ internal fun requiresLive(model: String): Boolean {
  * never guess a model onto this transport.
  */
 internal fun isInteractionsModel(model: String): Boolean {
-    return model.trim().lowercase(java.util.Locale.ROOT) == "gemini-3.5-transcribe"
+    return model.trim().lowercase(Locale.ROOT) == "gemini-3.5-transcribe"
 }
 
 /**
@@ -142,7 +146,7 @@ internal fun buildLiveActivityEndJson(): String =
 
 /** Live audio chunk message: base64 PCM with its 16 kHz mono mime type. */
 internal fun buildLiveAudioMessage(pcmChunk: ByteArray): String {
-    val data = java.util.Base64.getEncoder().encodeToString(pcmChunk)
+    val data = Base64.getEncoder().encodeToString(pcmChunk)
     return JSONObject()
         .put(
             "realtimeInput",
@@ -249,7 +253,7 @@ internal fun isLiveTurnComplete(serverJson: String): Boolean {
  */
 internal fun liveHost(baseUrl: String): String {
     val parsedHost = try {
-        java.net.URL(baseUrl).host.orEmpty()
+        URL(baseUrl).host.orEmpty()
     } catch (e: Exception) {
         ""
     }
@@ -258,7 +262,7 @@ internal fun liveHost(baseUrl: String): String {
 
 /** Live RPC path with the key attached (key never logged). */
 internal fun livePath(baseUrl: String, key: String): String =
-    "$LIVE_RPC_PATH?key=${java.net.URLEncoder.encode(key, "UTF-8")}"
+    "$LIVE_RPC_PATH?key=${URLEncoder.encode(key, "UTF-8")}"
 
 /**
  * Strips the WAV header, returning raw 16 kHz 16-bit mono PCM for the
@@ -371,7 +375,7 @@ internal fun buildGeminiRequestJson(audioB64: String, customPrompt: String = "")
 
 /** Gemini endpoint for a model: {base}/models/{model}:generateContent. */
 internal fun geminiUrl(baseUrl: String, model: String): String =
-    baseUrl.trimEnd('/') + "/models/${java.net.URLEncoder.encode(model, "UTF-8")}:generateContent"
+    baseUrl.trimEnd('/') + "/models/${URLEncoder.encode(model, "UTF-8")}:generateContent"
 
 /**
  * Joins the text of every part of every candidate in a generateContent response.
