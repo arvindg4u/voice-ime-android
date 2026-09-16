@@ -244,4 +244,25 @@ class ClipboardStoreTest {
         s.maxPinned = -5
         assertTrue(s.maxPinned >= 0)
     }
+
+    @Test
+    fun `snapshot never observes the empty middle state`() {
+        val s = store().apply { maxUnpinned = 500 }
+        s.add("seed", nowMs = 1_000L)
+        val empties = java.util.concurrent.atomic.AtomicInteger(0)
+        val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+        val writer = Thread {
+            var n = 0
+            while (!stop.get()) { s.add("w${n++}", nowMs = 2_000L + n); if (n > 200) n = 0 }
+        }
+        val readers = (0 until 3).map {
+            Thread {
+                while (!stop.get()) { if (s.snapshot().isEmpty()) empties.incrementAndGet() }
+            }
+        }
+        writer.start(); readers.forEach { it.start() }
+        Thread.sleep(2_000)
+        stop.set(true); writer.join(30_000); readers.forEach { it.join(30_000) }
+        assertEquals(0, empties.get())
+    }
 }
