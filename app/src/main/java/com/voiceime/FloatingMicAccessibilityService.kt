@@ -353,7 +353,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
             }
         }
 
-        when (event.actionMasked) {
+        return when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 cancelIdlePeekTimer()
                 gesture.downX = event.rawX
@@ -782,8 +782,9 @@ class FloatingMicAccessibilityService : AccessibilityService() {
     private fun armIdlePeekTimer() {
         cancelIdlePeekTimer()
         if (state != State.IDLE || button == null || targetNode == null) return
-        idlePeekRunnable = Runnable { attemptPeek() }
-        mainHandler.postDelayed(idlePeekRunnable, FloatingMicPolicy.PEEK_DELAY_MS)
+        val peekRunnable = Runnable { attemptPeek() }
+        idlePeekRunnable = peekRunnable
+        mainHandler.postDelayed(peekRunnable, FloatingMicPolicy.PEEK_DELAY_MS)
     }
 
     private fun cancelIdlePeekTimer() {
@@ -870,10 +871,11 @@ class FloatingMicAccessibilityService : AccessibilityService() {
             view.animate().alpha(1f).setDuration(120L).start()
             view.post { if (feedback === view) updateFeedbackPosition() }
             feedbackHideRunnable?.let(mainHandler::removeCallbacks)
-            feedbackHideRunnable = Runnable {
+            val hideRunnable = Runnable {
                 view.animate().alpha(0f).setDuration(180L).start()
             }
-            mainHandler.postDelayed(feedbackHideRunnable, durationMs)
+            feedbackHideRunnable = hideRunnable
+            mainHandler.postDelayed(hideRunnable, durationMs)
         }
     }
 
