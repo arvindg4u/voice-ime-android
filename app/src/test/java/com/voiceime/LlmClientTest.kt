@@ -287,7 +287,6 @@ class LlmClientTest {
         assertTrue(requiresLive("gemini-3.5-transcribe-live"))
         assertTrue(requiresLive("gemini-2.5-flash-live-preview"))
         assertTrue(requiresLive("gemini-2.5-flash-preview-native-audio-dialog"))
-        assertTrue(requiresLive("gemini-3.5-transcribe-live"))
         assertTrue(requiresLive("  Gemini-2.0-Flash-Live  "))
     }
 
