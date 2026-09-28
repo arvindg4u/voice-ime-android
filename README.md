@@ -90,6 +90,12 @@ microphone:
 - **Resilient recording** — Stop button or 5-min auto-stop; mic teardown runs
   off the UI thread so Stop never janks; granting mic permission auto-resumes a
   pending tap; blocked-mic detection hints when another app holds the mic.
+- **System floating button** — Optional AccessibilityService mode shows a
+  draggable mic whenever a non-password editable field has focus, with the
+  same edge-peek, restore, recording pulse, state colors, and focused-cursor
+  insertion pattern as the dedicated keyboard. It reuses this app's
+  `AudioRecorder`, `SettingsStore`, and `LlmClient`; it does not add a second
+  backend.
 
 ---
 
@@ -130,13 +136,20 @@ microphone:
 1. **Install** the APK and open the **Voice IME** app.
 2. **Configure** — enter **Base URL** (default
    `https://generativelanguage.googleapis.com/v1beta`), **API keys** (one per
-   line), and **Model** (e.g. `gemini-2.5-flash`), then **Save**. Tap **Test**
+   line), and **Model** (defaults to `gemini-3.5-transcribe-live`), then **Save**. Tap **Test**
    to verify with a 1-second 440 Hz tone.
 3. **Enable** — tap **Enable keyboard**, turn on **Voice IME** in system input
    settings, and select it as the current keyboard (use the 🌐 switcher or the
    back-button shortcut in the IME).
 4. **Speak** — tap 🎙️ in any text field, talk, tap **Stop**. Grant microphone
    permission when prompted (a pending tap auto-resumes after grant).
+5. **Optional floating button** — from Voice IME settings tap **Enable floating
+   button**, enable **Voice IME floating button** in Android Accessibility
+   settings, then place a cursor in any regular text field. The button follows
+   the focused editor even when Voice IME is not the selected keyboard.
+
+See [`docs/floating-button.md`](docs/floating-button.md) for the accessibility
+boundary, runtime flow, and device-testing notes.
 
 ---
 
@@ -149,7 +162,7 @@ All settings live in the **Voice IME** settings activity and persist in
 | ----- | ----------------- | ------------ |
 | **Base URL** | `https://generativelanguage.googleapis.com/v1beta` | Gemini-compatible endpoint. Swap for a proxy or gateway without rebuilding. |
 | **API keys** | one key per line | Round-robin pool with 429 failover (see below). Keys are never logged. |
-| **Model** | `gemini-2.5-flash` | Model appended as `{baseUrl}/models/{model}:generateContent`. Live-marker models route to WebSocket; batch-transcription models route to the Interactions API. |
+| **Model** | `gemini-3.5-transcribe-live` | Dedicated Live transcription model by default. Live-marker models route to the existing BidiGenerateContent WebSocket; batch-transcription models route to the existing Interactions API. |
 | **Custom prompt** | blank (disabled) | System instructions (max 2000 chars) appended under a *"User preferences:"* heading to every request, including Test. |
 | **Smart mode** | off | Model-specific enhanced transcription path where supported. |
 
@@ -269,7 +282,7 @@ that gets out of the way.
 minSdk 26 / targetSdk 34 · Gradle Kotlin DSL · JDK 17.
 
 ```text
-app/src/main/java/com/voiceime/      # 16 sources
+app/src/main/java/com/voiceime/      # 20 sources
 ├── VoiceImeService.kt               # IME lifecycle, state machine, transport UI
 ├── AudioRecorder.kt                 # AudioRecord capture → WAV, levels, 5-min cap
 ├── LlmClient.kt                     # REST transcription + key rotation + fallback
@@ -283,6 +296,9 @@ app/src/main/java/com/voiceime/      # 16 sources
 │                                    # history persistence, model, retention rules
 ├── ClipboardHistoryActivity.kt      # history UI (pin / delete)
 ├── SettingsActivity.kt              # Base URL · keys · model · prompt · Test
+├── FloatingMicAccessibilityService.kt # Focus-driven system overlay host
+├── FloatingMicView.kt               # Deterministic overlay mic rendering
+├── FloatingMicPolicy.kt             # Testable visibility/peek geometry
 ├── SettingsStore.kt                 # EncryptedSharedPreferences wrapper
 └── MicPermissionActivity.kt         # permission grant → auto-resume pending tap
 
@@ -331,7 +347,7 @@ cd voice-ime-android
 
 | Layer | How |
 | ----- | --- |
-| Unit | `./gradlew testDebugUnitTest` — 6 suites: `AudioRecorder`, `LlmClient` (MockWebServer incl. 429-rotation), `ClipboardStore`, `ClipboardPolicy`, `ImeLayoutPolicy`, `LiveSessionGuard` |
+| Unit | `./gradlew testDebugUnitTest` — focused JVM suites cover `AudioRecorder`, `LlmClient` (MockWebServer incl. 429-rotation), `ClipboardStore`, `ClipboardPolicy`, `ImeLayoutPolicy`, `LiveSessionGuard`, and `FloatingMicPolicy` |
 | Manual Test button | Settings → **Test** sends the 440 Hz tone through the full pipeline with your keys/model/prompt |
 | Manual IME flows | fresh field → dictate → commit · password double-tap · airplane-mode error → retry · rotate keys with an invalid-first key · 5-min auto-stop |
 
@@ -362,9 +378,12 @@ the view honest.
 - **No backup, no screenshots** — `android:allowBackup=false`; settings sets
   `FLAG_SECURE`.
 - **Explicit consent** — `RECORD_AUDIO` is requested at use time; password
-  fields need a deliberate second tap.
-- **Minimal permissions** — only `INTERNET` + `RECORD_AUDIO`. No contacts,
-  location, or storage access.
+  fields never show the floating button. The optional floating mode also
+  requires the user to enable its AccessibilityService explicitly.
+- **Minimal permissions** — only `INTERNET` + `RECORD_AUDIO` are declared.
+  Accessibility access is opt-in, focused-editor-only, and not a generic
+  screen-reading or content-change subscription. No contacts, location, or
+  storage access.
 
 > Found a vulnerability? Please open a **private security advisory** on GitHub
 > instead of a public issue.
@@ -400,6 +419,15 @@ auto-resumes after grant.
 
 Speak closer/louder, reduce background noise, and check the waveform moves
 while recording. Very short taps (< ~0.5 s) may capture no audio.
+</details>
+
+<details>
+<summary><strong>Floating mic doesn't appear</strong></summary>
+
+Open Voice IME → **Enable floating button**, enable **Voice IME floating
+button** in Android Accessibility settings, then place the cursor in a regular
+editable field. The service intentionally hides itself over Voice IME settings,
+password fields, and apps that do not expose a focused editable node.
 </details>
 
 <details>

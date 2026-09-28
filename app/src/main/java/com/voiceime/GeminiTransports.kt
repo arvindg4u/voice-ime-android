@@ -52,14 +52,15 @@ internal fun normalizeKeys(apiKeys: List<String>): List<String> =
     apiKeys.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
 
 /**
- * Opt-in Live-API routing: models whose name carries a live/native-audio
- * marker stream over the BidiGenerateContent WebSocket; everything else
- * keeps a REST path. Substring heuristic, so future live model names match
- * without an allowlist update.
+ * Live-API routing: Gemini 3.5 Transcribe Live and models whose name carries
+ * a live/native-audio marker stream over the BidiGenerateContent WebSocket;
+ * everything else keeps a REST path. The marker heuristic lets future live
+ * model names work without an allowlist update.
  */
 internal fun requiresLive(model: String): Boolean {
     val name = model.trim().lowercase(Locale.ROOT)
-    return name.contains("-live") ||
+    return name == "gemini-3.5-transcribe-live" ||
+        name.contains("-live") ||
         name.contains("live-preview") ||
         name.contains("native-audio") ||
         name.contains("-dialog")
