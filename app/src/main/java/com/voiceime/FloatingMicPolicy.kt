@@ -28,6 +28,15 @@ object FloatingMicPolicy {
     ): Boolean =
         isEditable && isFocused && !isPassword && packageName != ownPackageName
 
+    /**
+     * AccessibilityNodeInfo implementations sometimes expose an editor hint
+     * through text. Never copy that placeholder into the user's field.
+     */
+    fun textForInsertion(text: String?, hintText: String?): String? {
+        if (text == null) return null
+        return if (!hintText.isNullOrEmpty() && text == hintText) "" else text
+    }
+
     /** Keep the stop/cancel affordance reachable if focus disappears mid-session. */
     fun shouldKeepVisibleWhileBusy(isBusy: Boolean): Boolean = isBusy
 

@@ -23,6 +23,13 @@ class FloatingMicPolicyTest {
     }
 
     @Test
+    fun `placeholder text is not copied into the editor`() {
+        assertEquals("", FloatingMicPolicy.textForInsertion("What would you like to do?", "What would you like to do?"))
+        assertEquals("typed", FloatingMicPolicy.textForInsertion("typed", "What would you like to do?"))
+        assertEquals(null, FloatingMicPolicy.textForInsertion(null, "hint"))
+    }
+
+    @Test
     fun `drag snaps to an edge and clamps vertical position`() {
         assertEquals(8, FloatingMicPolicy.dockedX(100, 1000, 56, 8))
         assertEquals(936, FloatingMicPolicy.dockedX(850, 1000, 56, 8))

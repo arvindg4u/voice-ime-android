@@ -233,7 +233,7 @@ class LlmClient {
         @Volatile private var finished = false
         @Volatile private var failed = false
         private val finals = FinalAccumulator()
-        /** Completes on first turnComplete or first final fragment. */
+        /** Completes when the server finishes the manually ended turn. */
         private val finalSignal = CompletableDeferred<Unit>()
         /** True once the owner handed the session to the commit flow. */
         @Volatile private var detached = false
@@ -255,7 +255,13 @@ class LlmClient {
                 host = wsHost,
                 path = wsPath,
                 onText = { text -> onSocketText(text) },
-                onClosed = { _, _ -> finishOk() },
+                onClosed = { _, _ ->
+                    // A clean close is also a terminal signal. This avoids
+                    // waiting for the fallback timeout when the server closes
+                    // immediately after its final transcript.
+                    finalSignal.complete(Unit)
+                    finishOk()
+                },
                 onFailure = { t -> onSocketFailure(t) },
                 log = log,
             )
@@ -324,7 +330,6 @@ class LlmClient {
                             // Listener must never throw into the socket reader.
                         }
                     }
-                    finalSignal.complete(Unit)
                 } else {
                     // Interim repeats the full hypothesis: replace preview.
                     val preview = fragments.joinToString("")

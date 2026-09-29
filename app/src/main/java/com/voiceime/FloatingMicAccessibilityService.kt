@@ -54,7 +54,9 @@ class FloatingMicAccessibilityService : AccessibilityService() {
         private const val PREFS_NAME = "voice_ime_floating"
         private const val PREF_X = "x"
         private const val PREF_Y = "y"
-        private const val BUTTON_DP = 56
+        // Keep a 48 dp touch target while drawing a smaller ~44 dp visual
+        // control, so the overlay is compact without becoming hard to tap.
+        private const val BUTTON_DP = 48
         private const val MARGIN_DP = 8
         private const val FEEDBACK_OFFSET_DP = 12
         private const val FEEDBACK_DURATION_MS = 2_000L
@@ -650,7 +652,10 @@ class FloatingMicAccessibilityService : AccessibilityService() {
         try {
             node.refresh()
             node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            val current = node.text?.toString()
+            val current = FloatingMicPolicy.textForInsertion(
+                node.text?.toString(),
+                node.hintText?.toString(),
+            )
             if (current != null) {
                 val rawStart = node.textSelectionStart
                 val rawEnd = node.textSelectionEnd

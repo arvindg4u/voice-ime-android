@@ -58,8 +58,10 @@ final/interim handling, and cancellation.
 
 ## Interaction contract
 
-- **Tap idle button:** start dictation.
-- **Tap recording button:** stop, finalize, and insert.
+- **Tap idle button:** start dictation. The control uses a compact approximately
+  44 dp visual circle inside a 48 dp touch target so it stays easy to tap
+  without dominating the editor.
+- **Tap recording button:** stop, wait for the server's completed turn, and insert.
 - **Tap transcribing button:** cancel.
 - **Long-press transcribing button:** cancel.
 - **Drag:** move the button and snap it to the nearest horizontal edge; the
