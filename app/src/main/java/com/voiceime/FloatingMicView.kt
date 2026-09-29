@@ -30,7 +30,7 @@ class FloatingMicView(context: Context) : View(context) {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
-        strokeWidth = dp(2.4f)
+        strokeWidth = dp(1.9f)
     }
     private val glyphFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
@@ -82,7 +82,9 @@ class FloatingMicView(context: Context) : View(context) {
         }
         canvas.drawOval(circle, fillPaint)
         canvas.drawOval(circle, borderPaint)
-        drawMicGlyph(canvas, cx, cy, diameter * 0.23f)
+        // Keep the touch target at 48 dp, but use a restrained glyph so the
+        // icon reads as a small mic inside the compact floating control.
+        drawMicGlyph(canvas, cx, cy, diameter * 0.17f)
     }
 
     private fun drawMicGlyph(canvas: Canvas, cx: Float, cy: Float, halfWidth: Float) {

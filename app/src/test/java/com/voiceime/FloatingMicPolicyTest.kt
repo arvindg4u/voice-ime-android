@@ -25,8 +25,17 @@ class FloatingMicPolicyTest {
     @Test
     fun `placeholder text is not copied into the editor`() {
         assertEquals("", FloatingMicPolicy.textForInsertion("What would you like to do?", "What would you like to do?"))
+        assertEquals("", FloatingMicPolicy.textForInsertion("What would you like to do?", null, showingHintText = true))
         assertEquals("typed", FloatingMicPolicy.textForInsertion("typed", "What would you like to do?"))
         assertEquals(null, FloatingMicPolicy.textForInsertion(null, "hint"))
+    }
+
+    @Test
+    fun `live preview replaces an interim hypothesis without duplicating final text`() {
+        assertEquals("hello world", FloatingMicPolicy.mergeLivePreview("hello", "hello world"))
+        assertEquals("hello world again", FloatingMicPolicy.mergeLivePreview("hello world", "world again"))
+        assertEquals("hello world", FloatingMicPolicy.mergeLivePreview("hello", "world"))
+        assertEquals("hello", FloatingMicPolicy.mergeLivePreview("hello", ""))
     }
 
     @Test

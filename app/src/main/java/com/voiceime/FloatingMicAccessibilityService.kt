@@ -93,6 +93,19 @@ class FloatingMicAccessibilityService : AccessibilityService() {
     private var liveLastInterim = ""
     private var liveSessionId = 0L
 
+    /**
+     * Replaceable live-preview span in the focused editor. This mirrors the
+     * useful part of the reference floating-button behavior: each interim is
+     * a hypothesis, not another append. The original field snapshot lets a
+     * cancel remove the preview without leaving partial words behind.
+     */
+    private var livePreviewStart = 0
+    private var livePreviewLength = 0
+    private var livePreviewWritten = false
+    private var livePreviewOriginalText: String? = null
+    private var livePreviewOriginalSelectionStart = 0
+    private var livePreviewOriginalSelectionEnd = 0
+
     private var targetNode: AccessibilityNodeInfo? = null
 
     private var button: FloatingMicView? = null
@@ -260,6 +273,9 @@ class FloatingMicAccessibilityService : AccessibilityService() {
     }
 
     private fun clearTarget() {
+        // A focus change while recording must not leave a partial live
+        // hypothesis in the old editor.
+        if (livePreviewWritten) discardLivePreview()
         try {
             targetNode?.recycle()
         } catch (_: Exception) {
@@ -481,6 +497,8 @@ class FloatingMicAccessibilityService : AccessibilityService() {
         stopPulse()
         liveFinalParts.setLength(0)
         liveLastInterim = ""
+        beginLivePreview()
+        hideFeedback()
         setState(State.RECORDING)
         val model = settings.model
         val sessionId = liveGuard.next()
@@ -495,7 +513,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
                     mainHandler.post {
                         if (state == State.RECORDING && liveGuard.isCurrent(sessionId)) {
                             liveLastInterim = text
-                            showFeedback(text.take(140), durationMs = 1_200L)
+                            renderLivePreview()
                         }
                     }
                 },
@@ -505,7 +523,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
                             liveGuard.isCurrent(sessionId)
                         ) {
                             liveFinalParts.append(text)
-                            showFeedback(liveFinalParts.toString().take(140), durationMs = 1_500L)
+                            renderLivePreview()
                         }
                     }
                 },
@@ -543,6 +561,132 @@ class FloatingMicAccessibilityService : AccessibilityService() {
         capRunnable = Runnable {
             if (state == State.RECORDING) stopDictation()
         }.also { mainHandler.postDelayed(it, RECORD_CAP_MS) }
+    }
+
+    /** Captures the editor range that live hypotheses will replace. */
+    private fun beginLivePreview() {
+        livePreviewStart = 0
+        livePreviewLength = 0
+        livePreviewWritten = false
+        livePreviewOriginalText = null
+        val node = targetNode ?: return
+        try {
+            node.refresh()
+            val current = FloatingMicPolicy.textForInsertion(
+                node.text?.toString(),
+                node.hintText?.toString(),
+                node.isShowingHintText,
+            ) ?: return
+            val rawStart = node.textSelectionStart
+            val rawEnd = node.textSelectionEnd
+            val start = if (rawStart < 0) current.length else rawStart.coerceIn(0, current.length)
+            val end = if (rawEnd < 0) start else rawEnd.coerceIn(start, current.length)
+            livePreviewStart = start
+            livePreviewLength = end - start
+            livePreviewOriginalText = current
+            livePreviewOriginalSelectionStart = start
+            livePreviewOriginalSelectionEnd = end
+        } catch (_: Exception) {
+            livePreviewOriginalText = null
+        }
+    }
+
+    /**
+     * Writes the latest hypothesis over the previous one in the editor. If an
+     * app does not support ACTION_SET_TEXT, keep the preview in the feedback
+     * pill instead; never paste every interim and fill the user's clipboard.
+     */
+    private fun renderLivePreview() {
+        val preview = FloatingMicPolicy.mergeLivePreview(
+            liveFinalParts.toString(),
+            liveLastInterim,
+        )
+        if (preview.isEmpty()) return
+        if (replaceLivePreviewInEditor(preview)) {
+            hideFeedback()
+        } else {
+            showFeedback(preview.take(140), durationMs = 1_200L)
+        }
+    }
+
+    private fun replaceLivePreviewInEditor(text: String): Boolean {
+        if (text.isEmpty()) return false
+        val node = targetNode ?: return false
+        return try {
+            node.refresh()
+            val current = FloatingMicPolicy.textForInsertion(
+                node.text?.toString(),
+                node.hintText?.toString(),
+                node.isShowingHintText,
+            ) ?: return false
+            val start = livePreviewStart.coerceIn(0, current.length)
+            val end = (start + livePreviewLength).coerceIn(start, current.length)
+            val replacement = current.substring(0, start) + text + current.substring(end)
+            val args = Bundle().apply {
+                putCharSequence(
+                    AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    replacement,
+                )
+            }
+            if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return false
+            val cursor = start + text.length
+            val selection = Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
+            }
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection)
+            livePreviewLength = text.length
+            livePreviewWritten = true
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Removes the replaceable preview when the user cancels dictation. */
+    private fun discardLivePreview() {
+        if (!livePreviewWritten) {
+            clearLivePreviewState()
+            return
+        }
+        val original = livePreviewOriginalText
+        val node = targetNode
+        if (original != null && node != null) {
+            try {
+                node.refresh()
+                val args = Bundle().apply {
+                    putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        original,
+                    )
+                }
+                if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+                    val selection = Bundle().apply {
+                        putInt(
+                            AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT,
+                            livePreviewOriginalSelectionStart,
+                        )
+                        putInt(
+                            AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT,
+                            livePreviewOriginalSelectionEnd,
+                        )
+                    }
+                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection)
+                }
+            } catch (_: Exception) {
+                // The host app may have closed or replaced the editor.
+            }
+        }
+        clearLivePreviewState()
+    }
+
+    private fun clearLivePreviewState() {
+        livePreviewStart = 0
+        livePreviewLength = 0
+        livePreviewWritten = false
+        livePreviewOriginalText = null
+        livePreviewOriginalSelectionStart = 0
+        livePreviewOriginalSelectionEnd = 0
     }
 
     private fun stopDictation() {
@@ -624,8 +768,19 @@ class FloatingMicAccessibilityService : AccessibilityService() {
             showError("Cursor unavailable — try again")
             return
         }
-        val inserted = insertAtCursor(clean)
+        val inserted = if (livePreviewWritten) {
+            // Replace the last interim in place. If the target app rejected a
+            // direct live write, restore the original range before using the
+            // normal final insertion/paste fallback.
+            replaceLivePreviewInEditor(clean) || run {
+                discardLivePreview()
+                insertAtCursor(clean)
+            }
+        } else {
+            insertAtCursor(clean)
+        }
         if (inserted) {
+            clearLivePreviewState()
             setState(State.IDLE)
             showFeedback("Inserted")
             button?.performHapticFeedback(
@@ -655,6 +810,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
             val current = FloatingMicPolicy.textForInsertion(
                 node.text?.toString(),
                 node.hintText?.toString(),
+                node.isShowingHintText,
             )
             if (current != null) {
                 val rawStart = node.textSelectionStart
@@ -715,6 +871,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
     private fun cancelCurrentWork() {
         pendingPermissionTap = false
         capRunnable?.let(mainHandler::removeCallbacks)
+        discardLivePreview()
         capRunnable = null
         liveGuard.next()
         workJob?.cancel()
@@ -863,6 +1020,13 @@ class FloatingMicAccessibilityService : AccessibilityService() {
                 }
             })
         }.also { it.start() }
+    }
+
+    private fun hideFeedback() {
+        feedbackHideRunnable?.let(mainHandler::removeCallbacks)
+        feedbackHideRunnable = null
+        feedback?.animate()?.cancel()
+        feedback?.alpha = 0f
     }
 
     private fun showFeedback(text: String, durationMs: Long = FEEDBACK_DURATION_MS) {

@@ -30,11 +30,39 @@ object FloatingMicPolicy {
 
     /**
      * AccessibilityNodeInfo implementations sometimes expose an editor hint
-     * through text. Never copy that placeholder into the user's field.
+     * through text. Android 8+ also marks that case with isShowingHintText,
+     * but some apps omit hintText while still setting the flag. Never copy
+     * either representation of a placeholder into the user's field.
      */
-    fun textForInsertion(text: String?, hintText: String?): String? {
+    fun textForInsertion(
+        text: String?,
+        hintText: String?,
+        showingHintText: Boolean = false,
+    ): String? {
         if (text == null) return null
-        return if (!hintText.isNullOrEmpty() && text == hintText) "" else text
+        return if (showingHintText || (!hintText.isNullOrEmpty() && text == hintText)) "" else text
+    }
+
+    /**
+     * Merges the authoritative final prefix and the currently changing interim
+     * hypothesis for a live preview. Interims can be either the whole running
+     * hypothesis or only the next segment, so remove containment and the
+     * longest suffix/prefix overlap before joining them.
+     */
+    fun mergeLivePreview(finalText: String, interimText: String): String {
+        val final = finalText.trim()
+        val interim = interimText.trim()
+        if (final.isEmpty()) return interim
+        if (interim.isEmpty()) return final
+        if (final.contains(interim)) return final
+        if (interim.contains(final)) return interim
+        val max = minOf(final.length, interim.length)
+        for (overlap in max downTo 1) {
+            if (final.endsWith(interim.substring(0, overlap))) {
+                return final + interim.substring(overlap)
+            }
+        }
+        return "$final $interim"
     }
 
     /** Keep the stop/cancel affordance reachable if focus disappears mid-session. */
