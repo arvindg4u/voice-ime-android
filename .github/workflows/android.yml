@@ -36,6 +36,9 @@ jobs:
           ./gradlew assembleDebug --stacktrace
 
       - name: Upload debug APK
+        # Artifact retention is useful but must not hide a successful build when
+        # the repository-level Actions storage quota is temporarily exhausted.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: app-debug

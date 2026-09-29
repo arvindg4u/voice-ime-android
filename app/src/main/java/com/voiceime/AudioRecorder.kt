@@ -19,7 +19,7 @@ import kotlin.math.sqrt
 
 /**
  * Captures 16 kHz mono 16-bit PCM via VOICE_RECOGNITION source and encodes to WAV.
- * Simple pattern: stop button + 5 min auto-stop. No VAD library, no JNI.
+ * Simple pattern: stop button + 10 min safety auto-stop. No VAD library, no JNI.
  *
  * For Live streaming, [onPcmChunk] receives a copy of every captured buffer
  * (called on the recording thread — never touch views, just forward).
@@ -31,7 +31,7 @@ class AudioRecorder(
 ) {
     companion object {
         const val SAMPLE_RATE = 16000
-        const val MAX_DURATION_MS = 300_000L
+        const val MAX_DURATION_MS = 600_000L
         const val SILENCE_PEAK_THRESHOLD = 0.008f
         /** Grace period of effectively silent capture before the mic may be blocked. */
         const val BLOCKED_GRACE_MS = 2_000L

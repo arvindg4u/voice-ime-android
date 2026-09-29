@@ -63,8 +63,8 @@ class VoiceImeService : InputMethodService() {
          */
         private const val BLOCKED_CHECK_INTERVAL_MS = 1000L
 
-        /** Hard recording cap for both the one-shot and live paths. */
-        private const val RECORD_CAP_MS = 300_000L
+        /** Hard local recording cap for both one-shot and Live paths: 10 minutes. */
+        private const val RECORD_CAP_MS = AudioRecorder.MAX_DURATION_MS
 
         /** Label for the Enter button from the editor's action id. */
         internal fun enterLabel(actionId: Int): String = when (actionId and EditorInfo.IME_MASK_ACTION) {
@@ -473,12 +473,17 @@ class VoiceImeService : InputMethodService() {
             return
         }
         state = State.RECORDING
-        beginCapture { finishRecording(upload = true) }
+        beginCapture {
+            finishRecording(
+                upload = true,
+                liveStopReason = LiveSessionState.SESSION_LIMIT_REACHED,
+            )
+        }
     }
 
     /**
      * Shared capture prologue for startRecording/startLiveStreaming: state,
-     * timer, and cap wiring. The [onCap] callback fires on the 5 min cap.
+     * timer, and cap wiring. The [onCap] callback fires at the 10 minute local cap.
      */
     private fun beginCapture(onCap: () -> Unit) {
         recordStartMs = System.currentTimeMillis()
@@ -488,7 +493,7 @@ class VoiceImeService : InputMethodService() {
         renderState()
         statusText?.setText(R.string.ime_status_recording)
         startTimer()
-        // 5 min hard cap in addition to the recorder's own auto-stop.
+        // 10 min hard cap in addition to the recorder's own auto-stop.
         // Named handle (not an anonymous lambda) so stopTimer() can remove
         // exactly this callback instead of wiping the whole message queue.
         capRunnable?.let { mainHandler.removeCallbacks(it) }
@@ -525,6 +530,26 @@ class VoiceImeService : InputMethodService() {
             baseUrl = settings.baseUrl,
             model = model,
             smartMode = settings.smartMode,
+            onState = { lifecycle ->
+                mainHandler.post {
+                    when (lifecycle) {
+                        LiveSessionState.SERVER_GOING_AWAY -> {
+                            if (state == State.RECORDING) {
+                                finishRecording(
+                                    upload = true,
+                                    liveStopReason = LiveSessionState.SERVER_GOING_AWAY,
+                                )
+                            }
+                        }
+                        LiveSessionState.NETWORK_FAILURE -> {
+                            if (state == State.RECORDING) {
+                                cancelWork()
+                            }
+                        }
+                        else -> Unit
+                    }
+                }
+            },
             onInterim = { preview ->
                 mainHandler.post {
                     if (state == State.RECORDING && liveGuard.isCurrent(sessionId)) {
@@ -583,7 +608,12 @@ class VoiceImeService : InputMethodService() {
         liveFinalParts.setLength(0)
         liveLastInterim = ""
         state = State.RECORDING
-        beginCapture { finishRecording(upload = true) }
+        beginCapture {
+            finishRecording(
+                upload = true,
+                liveStopReason = LiveSessionState.SESSION_LIMIT_REACHED,
+            )
+        }
         if (state == State.RECORDING) hapticTap()
     }
 
@@ -608,15 +638,18 @@ class VoiceImeService : InputMethodService() {
      * Closes the live turn and waits for the server's final signal
      * (~12 s fallback). Returns true when the server finalized the turn.
      */
-    private suspend fun awaitLiveFinal(session: LlmClient.LiveSession?): Boolean {
+    private suspend fun awaitLiveFinal(
+        session: LlmClient.LiveSession?,
+        reason: LiveSessionState = LiveSessionState.USER_STOPPED,
+    ): Boolean {
         try {
-            session?.finish()
+            session?.finish(reason)
         } catch (e: Exception) {
             // Session already dead; fall through to whatever arrived.
         }
-        // Signal-driven: commit the moment the server finalizes
-        // (turnComplete/first final/close-with-text); ~12 s fallback
-        // commits from whatever interim/final text already arrived.
+        // Signal-driven: commit when the server reports turn completion or
+        // closes cleanly; the ~12 s fallback commits whatever interim/final
+        // text already arrived.
         val signaled = try {
             session?.awaitFinal(12_000) ?: false
         } catch (e: CancellationException) { throw e } catch (e: Exception) {
@@ -669,7 +702,10 @@ class VoiceImeService : InputMethodService() {
         renderState()
     }
 
-    private fun finishLiveStreaming(upload: Boolean) {
+    private fun finishLiveStreaming(
+        upload: Boolean,
+        liveStopReason: LiveSessionState = LiveSessionState.USER_STOPPED,
+    ) {
         stopTimer()
         val rec = recorder
         recorder = null
@@ -703,7 +739,7 @@ class VoiceImeService : InputMethodService() {
                 showError(getString(R.string.ime_error_no_speech))
                 return@launch
             }
-            awaitLiveFinal(session)
+            awaitLiveFinal(session, liveStopReason)
             val text = resolveLiveText()
             if (text.isEmpty()) {
                 showError(getString(R.string.ime_error_empty))
@@ -717,12 +753,15 @@ class VoiceImeService : InputMethodService() {
         }
     }
 
-    private fun finishRecording(upload: Boolean) {
+    private fun finishRecording(
+        upload: Boolean,
+        liveStopReason: LiveSessionState = LiveSessionState.USER_STOPPED,
+    ) {
         if (state != State.RECORDING) return
         // Live session owns its lifecycle; the one-shot path below is for
         // non-live models only.
         if (liveStreamingSession != null) {
-            finishLiveStreaming(upload)
+            finishLiveStreaming(upload, liveStopReason)
             return
         }
         stopTimer()

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Focus-only accessibility contract for the floating dictation button.
+
+    We deliberately do not subscribe to content-changed events or inspect the
+    full window tree. The service needs focused editor transitions so it can
+    show a button at the cursor and a focused node so it can insert the final
+    transcript. It does not use accessibility to monitor what the user types.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewFocused|typeViewTextSelectionChanged|typeWindowStateChanged|typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="100"
+    android:settingsActivity="com.voiceime.SettingsActivity"
+    android:description="@string/accessibility_description" />

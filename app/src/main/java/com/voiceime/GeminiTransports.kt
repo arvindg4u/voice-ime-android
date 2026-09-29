@@ -52,14 +52,15 @@ internal fun normalizeKeys(apiKeys: List<String>): List<String> =
     apiKeys.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
 
 /**
- * Opt-in Live-API routing: models whose name carries a live/native-audio
- * marker stream over the BidiGenerateContent WebSocket; everything else
- * keeps a REST path. Substring heuristic, so future live model names match
- * without an allowlist update.
+ * Live-API routing: Gemini 3.5 Transcribe Live and models whose name carries
+ * a live/native-audio marker stream over the BidiGenerateContent WebSocket;
+ * everything else keeps a REST path. The marker heuristic lets future live
+ * model names work without an allowlist update.
  */
 internal fun requiresLive(model: String): Boolean {
     val name = model.trim().lowercase(Locale.ROOT)
-    return name.contains("-live") ||
+    return name == "gemini-3.5-transcribe-live" ||
+        name.contains("-live") ||
         name.contains("live-preview") ||
         name.contains("native-audio") ||
         name.contains("-dialog")
@@ -168,6 +169,16 @@ internal fun buildLiveAudioEndJson(): String =
         .toString()
 
 /**
+ * The established finalization wire sequence. Keep the order stable: the
+ * activity boundary is sent before the audio-stream boundary, then the caller
+ * waits for the server's final transcription/turn-complete event.
+ */
+internal fun buildLiveFinalizationMessages(): List<String> = listOf(
+    buildLiveActivityEndJson(),
+    buildLiveAudioEndJson(),
+)
+
+/**
  * Reads transcription text fragments from one Live server message: FINAL
  * input-transcription first, else interim hypotheses (docs: interim feeds
  * live preview; final is authoritative). Tolerates snake_case variants;
@@ -226,6 +237,20 @@ internal fun isLiveSetupComplete(serverJson: String): Boolean {
         return false
     }
     return root.has("setupComplete") || root.has("setup_complete")
+}
+
+/**
+ * True when the Live server warns that it will soon disconnect. The raw
+ * socket stays unchanged; the session layer uses this signal to stop capture
+ * and finalize what is already buffered instead of waiting for a close.
+ */
+internal fun isLiveGoAway(serverJson: String): Boolean {
+    val root = try {
+        JSONObject(serverJson)
+    } catch (e: Exception) {
+        return false
+    }
+    return root.has("goAway") || root.has("go_away")
 }
 
 /**

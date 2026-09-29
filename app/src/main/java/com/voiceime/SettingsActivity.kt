@@ -1,5 +1,6 @@
 package com.voiceime
 
+import android.content.ComponentName
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
@@ -49,6 +50,9 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.settingsEnableKeyboard).setOnClickListener {
             startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
         }
+        findViewById<MaterialButton>(R.id.settingsEnableFloating).setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
         val clipToggle = findViewById<MaterialSwitch>(R.id.settingsClipboardToggle)
         clipToggle.isChecked = ClipboardHistoryActivity.isEnabled(this)
         clipToggle.setOnCheckedChangeListener { _, checked ->
@@ -69,6 +73,23 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<MaterialSwitch>(R.id.settingsClipboardToggle)?.isChecked =
             ClipboardHistoryActivity.isEnabled(this)
         findViewById<MaterialSwitch>(R.id.settingsSmartToggle)?.isChecked = settings.smartMode
+        findViewById<android.widget.TextView>(R.id.settingsFloatingStatus)?.setText(
+            if (isFloatingServiceEnabled()) {
+                R.string.settings_floating_status_on
+            } else {
+                R.string.settings_floating_status_off
+            },
+        )
+    }
+
+    private fun isFloatingServiceEnabled(): Boolean {
+        val component = ComponentName(this, FloatingMicAccessibilityService::class.java)
+            .flattenToString()
+        val enabled = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        ).orEmpty()
+        return enabled.split(':').any { it.equals(component, ignoreCase = true) }
     }
 
     private fun setClipHistoryEnabled(checked: Boolean) {

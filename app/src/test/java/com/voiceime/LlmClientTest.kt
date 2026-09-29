@@ -451,6 +451,31 @@ class LlmClientTest {
     }
 
     @Test
+    fun `live finalization uses ordered masked wire frames`() {
+        fun decodeTextFrame(frame: ByteArray): String {
+            assertEquals(0x81, frame[0].toInt() and 0xFF)
+            val encodedLength = frame[1].toInt() and 0x7F
+            assertTrue((frame[1].toInt() and 0x80) != 0)
+            assertTrue(encodedLength < 126)
+            val mask = frame.copyOfRange(2, 6)
+            val payload = frame.copyOfRange(6, 6 + encodedLength)
+            val plain = ByteArray(encodedLength) { i ->
+                (payload[i].toInt() xor mask[i % 4].toInt()).toByte()
+            }
+            return String(plain, Charsets.UTF_8)
+        }
+
+        val frames = buildLiveFinalizationMessages().map { LiveSocket.encodeTextFrame(it) }
+        assertEquals(2, frames.size)
+        val activityEnd = JSONObject(decodeTextFrame(frames[0]))
+            .getJSONObject("realtimeInput")
+        val audioEnd = JSONObject(decodeTextFrame(frames[1]))
+            .getJSONObject("realtimeInput")
+        assertTrue(activityEnd.has("activityEnd"))
+        assertTrue(audioEnd.getBoolean("audioStreamEnd"))
+    }
+
+    @Test
     fun `parseLiveInputTranscripts joins multi-message fragments`() {
         val first = """{"serverContent":{"inputTranscription":{"text":"hello "}}}"""
         val second = """{"serverContent":{"inputTranscription":{"text":"world"}}}"""
@@ -485,6 +510,33 @@ class LlmClientTest {
         assertEquals(
             emptyList<String>(),
             parseLiveInputTranscripts("""{"serverContent":{"inputTranscription":{}}}"""),
+        )
+    }
+
+    @Test
+    fun `isLiveGoAway detects server lifecycle warning without confusing transcript messages`() {
+        assertTrue(isLiveGoAway("""{"goAway":{"timeLeft":"2s"}}"""))
+        assertTrue(isLiveGoAway("""{"go_away":{"timeLeft":"2s"}}"""))
+        assertFalse(isLiveGoAway("""{"serverContent":{"turnComplete":true}}"""))
+        assertFalse(isLiveGoAway("not json"))
+    }
+
+    @Test
+    fun `live session lifecycle states include bounded terminal outcomes`() {
+        assertEquals(
+            setOf(
+                LiveSessionState.CONNECTING,
+                LiveSessionState.STREAMING,
+                LiveSessionState.USER_STOPPED,
+                LiveSessionState.SESSION_LIMIT_REACHED,
+                LiveSessionState.SERVER_GOING_AWAY,
+                LiveSessionState.SERVER_CLOSED,
+                LiveSessionState.FINALIZED,
+                LiveSessionState.FINALIZATION_TIMEOUT,
+                LiveSessionState.NETWORK_FAILURE,
+                LiveSessionState.CANCELLED,
+            ),
+            enumValues<LiveSessionState>().toSet(),
         )
     }
 

@@ -28,6 +28,15 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
 
+      - name: Verify release tag matches app version
+        run: |
+          version_name=$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)
+          tag_version="${GITHUB_REF_NAME#v}"
+          if [ -z "$version_name" ] || [ "$version_name" != "$tag_version" ]; then
+            echo "Release tag $GITHUB_REF_NAME does not match app version $version_name"
+            exit 1
+          fi
+
       - name: Restore release keystore
         env:
           VOICEIME_KEYSTORE_B64: ${{ secrets.VOICEIME_KEYSTORE_B64 }}
