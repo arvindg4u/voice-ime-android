@@ -10,6 +10,8 @@ package com.voiceime
 object FloatingMicPolicy {
     const val PEEK_VISIBLE_DP = 20
     const val PEEK_DELAY_MS = 4_000L
+    /** Keep the edge peek brief, then restore the full button for discoverability. */
+    const val PEEK_RESTORE_DELAY_MS = 700L
     const val PEEK_ANIMATION_MS = 220L
     const val TAP_THRESHOLD_DP = 10
     const val LONG_PRESS_MS = 500L

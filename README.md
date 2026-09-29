@@ -87,7 +87,7 @@ microphone:
 - **Live + batch transports** — REST `generateContent` by default, with
   WebSocket live-transport and Interactions-API routing per model, plus runtime
   fallback on transport mismatch.
-- **Resilient recording** — Stop button or 5-min auto-stop; mic teardown runs
+- **Resilient recording** — Stop button or 10-min auto-stop; mic teardown runs
   off the UI thread so Stop never janks; granting mic permission auto-resumes a
   pending tap; blocked-mic detection hints when another app holds the mic.
 - **System floating button** — Optional AccessibilityService mode shows a
@@ -284,7 +284,7 @@ minSdk 26 / targetSdk 34 · Gradle Kotlin DSL · JDK 17.
 ```text
 app/src/main/java/com/voiceime/      # 20 sources
 ├── VoiceImeService.kt               # IME lifecycle, state machine, transport UI
-├── AudioRecorder.kt                 # AudioRecord capture → WAV, levels, 5-min cap
+├── AudioRecorder.kt                 # AudioRecord capture → WAV, levels, 10-min cap
 ├── LlmClient.kt                     # REST transcription + key rotation + fallback
 ├── LiveSocket.kt                    # WebSocket live transport
 ├── GeminiTransports.kt              # transport routing (live / interactions / REST)
@@ -347,9 +347,9 @@ cd voice-ime-android
 
 | Layer | How |
 | ----- | --- |
-| Unit | `./gradlew testDebugUnitTest` — focused JVM suites cover `AudioRecorder`, `LlmClient` (MockWebServer incl. 429-rotation), `ClipboardStore`, `ClipboardPolicy`, `ImeLayoutPolicy`, `LiveSessionGuard`, and `FloatingMicPolicy` |
+| Unit | `./gradlew testDebugUnitTest` — focused JVM suites cover `AudioRecorder`, `LlmClient` (MockWebServer incl. 429-rotation and raw WebSocket finalization-frame checks), `ClipboardStore`, `ClipboardPolicy`, `ImeLayoutPolicy`, `LiveSessionGuard`, and `FloatingMicPolicy` |
 | Manual Test button | Settings → **Test** sends the 440 Hz tone through the full pipeline with your keys/model/prompt |
-| Manual IME flows | fresh field → dictate → commit · password double-tap · airplane-mode error → retry · rotate keys with an invalid-first key · 5-min auto-stop |
+| Manual IME flows | fresh field → dictate → commit · password double-tap · airplane-mode error → retry · rotate keys with an invalid-first key · 10-min auto-stop |
 
 `WaveformView` itself is framework-bound (no unit tests by design) — its math
 lives in `ImeLayoutPolicy` where CI can reach it, and the compile gate keeps
@@ -359,10 +359,11 @@ the view honest.
 
 ## 📏 Limits
 
-- **Recording cap: 5 min.** At 16 kHz mono 16-bit (32 KB/s ≈ 1.9 MB/min WAV,
-  ×4/3 base64 ≈ 2.6 MB/min JSON) a full clip is ≈ 13 MB of request JSON —
-  comfortably under the 20 MB inline-audio ceiling. Gemini supports up to
-  1 hour; we stay well inside that.
+- **Recording cap: 10 min.** At 16 kHz mono 16-bit (32 KB/s ≈ 1.9 MB/min WAV,
+  ×4/3 base64 ≈ 2.6 MB/min JSON) a full clip is ≈ 26 MB if sent as one inline
+  request. The default Live Transcribe transport streams PCM instead, and its
+  documented session limit is 10 minutes; the local cap is shared by both
+  streaming and one-shot recorder flows.
 - **Network-bound** — transcription needs connectivity; offline shows an
   explicit network error with retry.
 - **Debug distribution** — install via APK/CI artifact; not on Google Play.

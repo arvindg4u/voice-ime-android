@@ -70,7 +70,10 @@ final/interim handling, and cancellation.
 - **Drag:** move the button and snap it to the nearest horizontal edge; the
   position is persisted in app-private preferences.
 - **Idle for four seconds:** slide toward the edge, leaving a 20 dp tappable
-  sliver. First tap restores it; a second tap starts dictation.
+  sliver. The sliver restores to the full button after 700 ms plus the short
+  slide animation, then the four-second idle timer starts again. A tap while
+  peeked restores it without starting dictation; a tap on the restored button
+  starts dictation.
 - **Recording:** the button changes color and pulses. The pulse respects
   Android's animator-duration/reduced-motion setting.
 - **Focus disappears while busy:** the button remains reachable so the user

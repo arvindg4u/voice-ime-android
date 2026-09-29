@@ -62,7 +62,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
         private const val FEEDBACK_DURATION_MS = 2_000L
         private const val LIVE_PREVIEW_MAX_CHARS = 140
         private const val LIVE_FINAL_TIMEOUT_MS = 12_000L
-        private const val RECORD_CAP_MS = 300_000L
+        private const val RECORD_CAP_MS = AudioRecorder.MAX_DURATION_MS
 
         @Volatile
         private var connectedInstance: FloatingMicAccessibilityService? = null
@@ -104,6 +104,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
     private var isPeeked = false
     private var prePeekX: Int? = null
     private var idlePeekRunnable: Runnable? = null
+    private var peekRestoreRunnable: Runnable? = null
     private var feedbackHideRunnable: Runnable? = null
 
     private val dp: Float
@@ -496,6 +497,23 @@ class FloatingMicAccessibilityService : AccessibilityService() {
                 baseUrl = settings.baseUrl,
                 model = model,
                 smartMode = settings.smartMode,
+                onState = { lifecycle ->
+                    mainHandler.post {
+                        when (lifecycle) {
+                            LiveSessionState.SERVER_GOING_AWAY -> {
+                                if (state == State.RECORDING) {
+                                    stopDictation(LiveSessionState.SERVER_GOING_AWAY)
+                                }
+                            }
+                            LiveSessionState.NETWORK_FAILURE -> {
+                                if (state == State.RECORDING) {
+                                    cancelCurrentWork()
+                                }
+                            }
+                            else -> Unit
+                        }
+                    }
+                },
                 onInterim = { text ->
                     mainHandler.post {
                         if (state == State.RECORDING && liveGuard.isCurrent(sessionId)) {
@@ -546,7 +564,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
         button?.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
         startPulse()
         capRunnable = Runnable {
-            if (state == State.RECORDING) stopDictation()
+            if (state == State.RECORDING) stopDictation(LiveSessionState.SESSION_LIMIT_REACHED)
         }.also { mainHandler.postDelayed(it, RECORD_CAP_MS) }
     }
 
@@ -563,7 +581,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
         if (preview.isNotEmpty()) showLivePreview(preview)
     }
 
-    private fun stopDictation() {
+    private fun stopDictation(reason: LiveSessionState = LiveSessionState.USER_STOPPED) {
         if (state != State.RECORDING) return
         cancelIdlePeekTimer()
         stopPulse()
@@ -588,7 +606,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
             }
 
             if (session != null) {
-                session.finish()
+                session.finish(reason)
                 session.awaitFinal(LIVE_FINAL_TIMEOUT_MS)
                 session.close()
                 handedOffLiveSession = null
@@ -815,6 +833,8 @@ class FloatingMicAccessibilityService : AccessibilityService() {
     private fun cancelIdlePeekTimer() {
         idlePeekRunnable?.let(mainHandler::removeCallbacks)
         idlePeekRunnable = null
+        peekRestoreRunnable?.let(mainHandler::removeCallbacks)
+        peekRestoreRunnable = null
     }
 
     private fun attemptPeek() {
@@ -831,10 +851,22 @@ class FloatingMicAccessibilityService : AccessibilityService() {
             insetPx = 0,
         )
         animateButtonX(target)
+        // Keep the edge sliver discoverable but do not leave it there forever:
+        // after a brief 700 ms peek, restore the full button and restart the
+        // normal idle timer. The resulting 700 ms + 220 ms animation is under
+        // one second, then the same cycle repeats while the editor remains idle.
+        val restore = Runnable {
+            peekRestoreRunnable = null
+            if (state == State.IDLE && isPeeked) restoreFromPeek()
+        }
+        peekRestoreRunnable = restore
+        mainHandler.postDelayed(restore, FloatingMicPolicy.PEEK_RESTORE_DELAY_MS)
     }
 
     private fun restoreFromPeek() {
         if (!isPeeked) return
+        peekRestoreRunnable?.let(mainHandler::removeCallbacks)
+        peekRestoreRunnable = null
         val params = buttonParams ?: return
         val target = prePeekX ?: FloatingMicPolicy.dockedX(
             params.x,

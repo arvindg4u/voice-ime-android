@@ -169,6 +169,16 @@ internal fun buildLiveAudioEndJson(): String =
         .toString()
 
 /**
+ * The established finalization wire sequence. Keep the order stable: the
+ * activity boundary is sent before the audio-stream boundary, then the caller
+ * waits for the server's final transcription/turn-complete event.
+ */
+internal fun buildLiveFinalizationMessages(): List<String> = listOf(
+    buildLiveActivityEndJson(),
+    buildLiveAudioEndJson(),
+)
+
+/**
  * Reads transcription text fragments from one Live server message: FINAL
  * input-transcription first, else interim hypotheses (docs: interim feeds
  * live preview; final is authoritative). Tolerates snake_case variants;
@@ -227,6 +237,20 @@ internal fun isLiveSetupComplete(serverJson: String): Boolean {
         return false
     }
     return root.has("setupComplete") || root.has("setup_complete")
+}
+
+/**
+ * True when the Live server warns that it will soon disconnect. The raw
+ * socket stays unchanged; the session layer uses this signal to stop capture
+ * and finalize what is already buffered instead of waiting for a close.
+ */
+internal fun isLiveGoAway(serverJson: String): Boolean {
+    val root = try {
+        JSONObject(serverJson)
+    } catch (e: Exception) {
+        return false
+    }
+    return root.has("goAway") || root.has("go_away")
 }
 
 /**

@@ -26,6 +26,23 @@ import java.util.concurrent.TimeUnit
 class TranscribeException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /**
+ * Lifecycle states for a continuous Live session. These are internal control
+ * states only; transcript text and API credentials are never included.
+ */
+enum class LiveSessionState {
+    CONNECTING,
+    STREAMING,
+    USER_STOPPED,
+    SESSION_LIMIT_REACHED,
+    SERVER_GOING_AWAY,
+    SERVER_CLOSED,
+    FINALIZED,
+    FINALIZATION_TIMEOUT,
+    NETWORK_FAILURE,
+    CANCELLED,
+}
+
+/**
  * Sends WAV audio to the right Gemini transport and returns the transcript
  * plus the index of the key that worked, so the caller can advance its
  * cursor to (usedIndex + 1) % n for even spread. Transport routing:
@@ -197,11 +214,22 @@ class LlmClient {
         onInterim: (String) -> Unit,
         onFinal: (String) -> Unit,
         onError: (String) -> Unit,
+        onState: (LiveSessionState) -> Unit = {},
     ): LiveSession {
         // Drop any stale alias: the previous session already terminated
         // (its terminal path closed the socket); only the new one is live.
         liveSession?.close()
-        val session = LiveSession(baseUrl, model, key, smartMode, onInterim, onFinal, onError, ::debugLog)
+        val session = LiveSession(
+            baseUrl = baseUrl,
+            model = model,
+            key = key,
+            smartMode = smartMode,
+            onInterim = onInterim,
+            onFinal = onFinal,
+            onError = onError,
+            onState = onState,
+            log = ::debugLog,
+        )
         liveSession = session
         session.openAsync()
         return session
@@ -222,8 +250,10 @@ class LlmClient {
         private val onInterim: (String) -> Unit,
         private val onFinal: (String) -> Unit,
         private val onError: (String) -> Unit,
+        private val onState: (LiveSessionState) -> Unit,
         private val log: (String, String) -> Unit,
     ) {
+        @Volatile private var lifecycleState = LiveSessionState.CONNECTING
         private val wsHost = liveHost(baseUrl)
         private val wsPath = livePath(baseUrl, key)
         @Volatile private var socket: LiveSocket? = null
@@ -244,6 +274,27 @@ class LlmClient {
          */
         private val openScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+        fun state(): LiveSessionState = lifecycleState
+
+        private fun setState(next: LiveSessionState) {
+            if (lifecycleState == next) return
+            lifecycleState = next
+            try {
+                onState(next)
+            } catch (e: Exception) {
+                // Lifecycle observers must never throw into socket callbacks.
+            }
+        }
+
+        private fun isTerminalState(): Boolean = when (lifecycleState) {
+            LiveSessionState.SERVER_CLOSED,
+            LiveSessionState.FINALIZED,
+            LiveSessionState.FINALIZATION_TIMEOUT,
+            LiveSessionState.NETWORK_FAILURE,
+            LiveSessionState.CANCELLED -> true
+            else -> false
+        }
+
         /**
          * Connects the socket in the background: connect() does DNS + TCP +
          * TLS synchronously and Android throws NetworkOnMainThreadException
@@ -256,9 +307,16 @@ class LlmClient {
                 path = wsPath,
                 onText = { text -> onSocketText(text) },
                 onClosed = { _, _ ->
-                    // A clean close is also a terminal signal. This avoids
-                    // waiting for the fallback timeout when the server closes
-                    // immediately after its final transcript.
+                    // A clean close is also a terminal signal. Preserve a
+                    // completed state, otherwise record that the server closed
+                    // before the expected turn-complete event.
+                    if (lifecycleState != LiveSessionState.FINALIZED &&
+                        lifecycleState != LiveSessionState.FINALIZATION_TIMEOUT &&
+                        lifecycleState != LiveSessionState.NETWORK_FAILURE &&
+                        lifecycleState != LiveSessionState.CANCELLED
+                    ) {
+                        setState(LiveSessionState.SERVER_CLOSED)
+                    }
                     finalSignal.complete(Unit)
                     finishOk()
                 },
@@ -313,6 +371,13 @@ class LlmClient {
                 log("live-rx", "msg#$shapeLogged len=" + text.length)
             }
             logShapeOnce(text)
+            if (isLiveGoAway(text)) {
+                // GoAway is a server JSON message, not a WebSocket frame. Do
+                // not alter the proven raw socket; notify the owner so it can
+                // stop capture and run the existing finalization path.
+                if (!isTerminalState()) setState(LiveSessionState.SERVER_GOING_AWAY)
+                return
+            }
             if (!setupComplete && isLiveSetupComplete(text)) {
                 handleSetupComplete()
                 return
@@ -341,6 +406,7 @@ class LlmClient {
                 }
             }
             if (isLiveTurnComplete(text)) {
+                setState(LiveSessionState.FINALIZED)
                 finalSignal.complete(Unit)
                 finishOk()
             }
@@ -352,6 +418,7 @@ class LlmClient {
          */
         private fun handleSetupComplete() {
             setupComplete = true
+            setState(LiveSessionState.STREAMING)
             log("live-session", "setupComplete, starting turn")
             try {
                 if (finished || failed) return
@@ -419,14 +486,18 @@ class LlmClient {
         /**
          * Sends the turn-end markers. Does NOT close: the owner awaits
          * [awaitFinal] and closes after reading the commit snapshot.
-         * Markers go out before any state flip so a fast Stop that races
-         * teardown still delivers turn boundaries to the server.
+         * The stop reason is recorded before the markers are queued so a
+         * lifecycle callback can distinguish a user stop from a local cap.
          */
-        fun finish() {
+        fun finish(reason: LiveSessionState = LiveSessionState.USER_STOPPED) {
             if (finished || failed) return
+            if (lifecycleState != LiveSessionState.SERVER_GOING_AWAY) {
+                setState(reason)
+            }
             try {
-                socket?.send(buildLiveActivityEndJson())
-                socket?.send(buildLiveAudioEndJson())
+                for (message in buildLiveFinalizationMessages()) {
+                    socket?.send(message)
+                }
             } catch (e: Exception) {
                 // Send path dead; close will settle via onFailure/onClosed.
             } finally {
@@ -435,8 +506,8 @@ class LlmClient {
         }
 
         /**
-         * Suspends until the server finalizes (turnComplete, first final, or
-         * close-with-text) or [timeoutMs] elapses. Returns true when a signal
+         * Suspends until the server finalizes (turnComplete or a clean
+         * close) or [timeoutMs] elapses. Returns true when a terminal signal
          * arrived; false on timeout — the caller then commits from whatever
          * interim/final text already arrived.
          */
@@ -445,6 +516,7 @@ class LlmClient {
                 withTimeout(timeoutMs) { finalSignal.await() }
                 true
             } catch (e: TimeoutCancellationException) {
+                if (!isTerminalState()) setState(LiveSessionState.FINALIZATION_TIMEOUT)
                 false
             }
         }
@@ -463,6 +535,9 @@ class LlmClient {
          * sends end markers and leaves the socket server-dependent.
          */
         fun close() {
+            if (!isTerminalState() && lifecycleState != LiveSessionState.SERVER_GOING_AWAY) {
+                setState(LiveSessionState.CANCELLED)
+            }
             finished = true
             openScope.cancel()
             synchronized(pending) { pending.clear() }
@@ -515,8 +590,10 @@ class LlmClient {
         }
 
         private fun failOnce(message: String, cause: Throwable? = null) {
-            if (finished || failed) return
+            if (failed || isTerminalState()) return
             failed = true
+            setState(LiveSessionState.NETWORK_FAILURE)
+            finalSignal.complete(Unit)
             openScope.cancel()
             synchronized(pending) { pending.clear() }
             try {
@@ -696,6 +773,13 @@ class LlmClient {
         private val lastTranscriptMs: AtomicLong,
     ) {
         fun onText(text: String) {
+            if (isLiveGoAway(text)) {
+                // Preserve the already streamed transcript and let the caller
+                // finish this bounded attempt without waiting for the socket
+                // close to become the only signal.
+                completeDone(closeSocket = true)
+                return
+            }
             val fragments = parseLiveInputTranscripts(text)
             if (fragments.isNotEmpty()) {
                 if (hasLiveFinalTranscript(text)) {
@@ -860,8 +944,11 @@ class LlmClient {
             }
             offset = end
         }
-        if (!deferred.isCompleted) raw.send(buildLiveActivityEndJson())
-        if (!deferred.isCompleted) raw.send(buildLiveAudioEndJson())
+        if (!deferred.isCompleted) {
+            for (message in buildLiveFinalizationMessages()) {
+                if (!raw.send(message)) break
+            }
+        }
     }
 
     /** One Live key attempt: success, rotate on 429, or fail with a user-safe message. */

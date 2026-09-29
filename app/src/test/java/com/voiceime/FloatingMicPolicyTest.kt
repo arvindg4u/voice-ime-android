@@ -17,6 +17,11 @@ class FloatingMicPolicyTest {
     }
 
     @Test
+    fun `peek restores before one second and keeps the slide animation short`() {
+        assertTrue(FloatingMicPolicy.PEEK_RESTORE_DELAY_MS + FloatingMicPolicy.PEEK_ANIMATION_MS < 1_000L)
+    }
+
+    @Test
     fun `peek leaves the requested visible sliver on either edge`() {
         assertEquals(980, FloatingMicPolicy.peekedX(944, 1000, 56, 20))
         assertEquals(-36, FloatingMicPolicy.peekedX(8, 1000, 56, 20))
