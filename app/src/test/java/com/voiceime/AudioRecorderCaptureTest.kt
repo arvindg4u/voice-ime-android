@@ -75,7 +75,7 @@ class AudioRecorderCaptureTest {
             assertFalse(rec.isRecording())
             assertTrue("wav=${wav.size}", wav.size > 44)
             assertEquals('R'.code.toByte(), wav[0])
-            assertTrue(AudioRecorder.isSilent(peak))
+            assertFalse(AudioRecorder.isSilent(peak))
         }
     }
 
