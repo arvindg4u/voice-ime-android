@@ -69,8 +69,13 @@ object FloatingMicPolicy {
      * Keeps the newest part of a long live preview visible in the compact
      * bubble. The leading side rolls away as new words arrive.
      */
-    fun livePreviewTail(text: String, maxChars: Int): String =
-        text.takeLast(maxChars.coerceAtLeast(0)).trimStart()
+    fun livePreviewTail(text: String, maxChars: Int): String {
+        val limit = maxChars.coerceAtLeast(0)
+        val tail = text.takeLast(limit)
+        if (text.length <= limit) return tail.trimStart()
+        val boundary = tail.indexOfFirst { it.isWhitespace() }
+        return if (boundary >= 0) tail.substring(boundary).trimStart() else tail.trimStart()
+    }
 
     /** Keep the stop/cancel affordance reachable if focus disappears mid-session. */
     fun shouldKeepVisibleWhileBusy(isBusy: Boolean): Boolean = isBusy
