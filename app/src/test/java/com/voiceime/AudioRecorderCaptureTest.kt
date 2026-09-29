@@ -57,6 +57,10 @@ class AudioRecorderCaptureTest {
 
     @Test
     fun `start stop round trip yields valid wav repeatedly`() {
+        // The default Robolectric source returns immediately and can grow the
+        // in-memory capture buffer without bound. Use the bounded synthetic
+        // source so this lifecycle test remains deterministic on CI runners.
+        ShadowAudioRecord.setSource(sineSource())
         repeat(3) {
             // Arrange
             val rec = AudioRecorder()
