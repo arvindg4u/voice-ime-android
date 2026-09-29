@@ -39,6 +39,12 @@ class FloatingMicPolicyTest {
     }
 
     @Test
+    fun `live preview keeps the newest tail inside the bubble limit`() {
+        assertEquals("five six", FloatingMicPolicy.livePreviewTail("one two three four five six", 10))
+        assertEquals("latest", FloatingMicPolicy.livePreviewTail("latest", 140))
+    }
+
+    @Test
     fun `drag snaps to an edge and clamps vertical position`() {
         assertEquals(8, FloatingMicPolicy.dockedX(100, 1000, 56, 8))
         assertEquals(936, FloatingMicPolicy.dockedX(850, 1000, 56, 8))

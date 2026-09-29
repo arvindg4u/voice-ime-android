@@ -62,6 +62,9 @@ final/interim handling, and cancellation.
   44 dp visual circle inside a 48 dp touch target so it stays easy to tap
   without dominating the editor.
 - **Tap recording button:** stop, wait for the server's completed turn, and insert.
+- **Interim transcript:** stays in the floating feedback bubble only; it never
+  modifies the focused editor. The bubble continuously replaces its hypothesis
+  and keeps the newest tail visible when the display limit is reached.
 - **Tap transcribing button:** cancel.
 - **Long-press transcribing button:** cancel.
 - **Drag:** move the button and snap it to the nearest horizontal edge; the

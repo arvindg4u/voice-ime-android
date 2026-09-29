@@ -65,6 +65,13 @@ object FloatingMicPolicy {
         return "$final $interim"
     }
 
+    /**
+     * Keeps the newest part of a long live preview visible in the compact
+     * bubble. The leading side rolls away as new words arrive.
+     */
+    fun livePreviewTail(text: String, maxChars: Int): String =
+        text.takeLast(maxChars.coerceAtLeast(0)).trimStart()
+
     /** Keep the stop/cancel affordance reachable if focus disappears mid-session. */
     fun shouldKeepVisibleWhileBusy(isBusy: Boolean): Boolean = isBusy
 
