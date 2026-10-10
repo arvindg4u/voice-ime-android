@@ -23,6 +23,7 @@ class MicPermissionActivity : Activity() {
             PackageManager.PERMISSION_GRANTED
         ) {
             setResult(RESULT_OK)
+            FloatingMicAccessibilityService.onMicPermissionResult(granted = true)
             finish()
             return
         }
@@ -43,6 +44,7 @@ class MicPermissionActivity : Activity() {
             val granted = grantResults.isNotEmpty() &&
                 grantResults[0] == PackageManager.PERMISSION_GRANTED
             setResult(if (granted) RESULT_OK else RESULT_CANCELED)
+            FloatingMicAccessibilityService.onMicPermissionResult(granted)
         }
         finish()
     }

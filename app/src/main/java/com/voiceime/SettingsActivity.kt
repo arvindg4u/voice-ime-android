@@ -1,14 +1,22 @@
 package com.voiceime
 
+import android.content.ActivityNotFoundException
+import android.content.ComponentName
 import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
+import android.widget.TextView
 import android.widget.Toast
-import com.google.android.material.button.MaterialButton
-import com.google.android.material.materialswitch.MaterialSwitch
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -22,6 +30,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var apiKeyField: TextInputEditText
     private lateinit var modelField: TextInputEditText
     private lateinit var customPromptField: TextInputEditText
+    private lateinit var keyboardStatus: TextView
     private val llm by lazy { LlmClient() }
 
     companion object {
@@ -38,6 +47,8 @@ class SettingsActivity : AppCompatActivity() {
         apiKeyField = findViewById(R.id.settingsApiKey)
         modelField = findViewById(R.id.settingsModel)
         customPromptField = findViewById(R.id.settingsCustomPrompt)
+        keyboardStatus = findViewById(R.id.settingsKeyboardStatus)
+        protectApiKeyField()
 
         baseUrlField.setText(settings.baseUrl)
         apiKeyField.setText(settings.apiKeys.joinToString("\n"))
@@ -47,7 +58,13 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<MaterialButton>(R.id.settingsSave).setOnClickListener { save() }
         findViewById<MaterialButton>(R.id.settingsTest).setOnClickListener { test() }
         findViewById<MaterialButton>(R.id.settingsEnableKeyboard).setOnClickListener {
-            startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+            openSystemSettings(
+                Settings.ACTION_INPUT_METHOD_SETTINGS,
+                R.string.settings_keyboard_settings_unavailable,
+            )
+        }
+        findViewById<MaterialButton>(R.id.settingsEnableFloating).setOnClickListener {
+            showFloatingServiceDisclosure()
         }
         val clipToggle = findViewById<MaterialSwitch>(R.id.settingsClipboardToggle)
         clipToggle.isChecked = ClipboardHistoryActivity.isEnabled(this)
@@ -69,6 +86,122 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<MaterialSwitch>(R.id.settingsClipboardToggle)?.isChecked =
             ClipboardHistoryActivity.isEnabled(this)
         findViewById<MaterialSwitch>(R.id.settingsSmartToggle)?.isChecked = settings.smartMode
+        findViewById<TextView>(R.id.settingsFloatingStatus)?.setText(
+            if (isFloatingServiceEnabled()) {
+                R.string.settings_floating_status_on
+            } else {
+                R.string.settings_floating_status_off
+            },
+        )
+        findViewById<MaterialButton>(R.id.settingsEnableFloating)?.setText(
+            if (isFloatingServiceEnabled()) {
+                R.string.settings_manage_floating
+            } else {
+                R.string.settings_enable_floating
+            },
+        )
+        if (::keyboardStatus.isInitialized) refreshKeyboardStatus()
+    }
+
+    /** Opens an OS settings page with a generic Settings fallback for OEM variants. */
+    private fun openSystemSettings(action: String, unavailableMessage: Int) {
+        try {
+            startActivity(Intent(action))
+        } catch (_: ActivityNotFoundException) {
+            try {
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+            } catch (_: ActivityNotFoundException) {
+                Toast.makeText(this, unavailableMessage, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun showFloatingServiceDisclosure() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.settings_floating_disclosure_title)
+            .setMessage(R.string.settings_floating_disclosure_message)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setNeutralButton(R.string.settings_floating_disclosure_app_info) { _, _ ->
+                openAppInfoSettings()
+            }
+            .setPositiveButton(R.string.settings_floating_disclosure_continue) { _, _ ->
+                openSystemSettings(
+                    Settings.ACTION_ACCESSIBILITY_SETTINGS,
+                    R.string.settings_accessibility_settings_unavailable,
+                )
+            }
+            .show()
+    }
+
+    /** Opens this app's details so sideloaded installs can allow restricted settings. */
+    private fun openAppInfoSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", packageName, null)
+        }
+        try {
+            startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(
+                this,
+                R.string.settings_app_info_unavailable,
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    /**
+     * Reports whether the optional focused-editor AccessibilityService is on.
+     * Android settings remain the only place that can enable or disable it.
+     */
+    private fun isFloatingServiceEnabled(): Boolean {
+        val expected = ComponentName(this, FloatingMicAccessibilityService::class.java)
+        val enabled = try {
+            Settings.Secure.getString(
+                contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            ).orEmpty()
+        } catch (_: SecurityException) {
+            return false
+        }
+        return enabled.split(':').any { flattened ->
+            ComponentName.unflattenFromString(flattened.trim()) == expected
+        }
+    }
+
+    /** Reports enabled/current keyboard state without reading private settings. */
+    private fun refreshKeyboardStatus() {
+        val component = ComponentName(this, VoiceImeService::class.java)
+        val inputMethodManager = getSystemService(InputMethodManager::class.java)
+        val enabled = inputMethodManager?.enabledInputMethodList?.any { info ->
+            ComponentName.unflattenFromString(info.id) == component
+        } == true
+        val currentId = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.DEFAULT_INPUT_METHOD,
+        )
+        val selected = currentId?.let { ComponentName.unflattenFromString(it) == component } == true
+
+        val message = when {
+            selected -> R.string.settings_keyboard_status_selected
+            enabled -> R.string.settings_keyboard_status_enabled
+            else -> R.string.settings_keyboard_status_disabled
+        }
+        keyboardStatus.setText(message)
+    }
+
+    /**
+     * Protects the saved API-key input from obscured taps and, on Android 14+
+     * (including Android 16), from accessibility services not designated as
+     * assistive accessibility tools. Screen-reader tools remain supported.
+     */
+    private fun protectApiKeyField() {
+        val keyLayout = findViewById<View>(R.id.settingsApiKeyLayout)
+        keyLayout.filterTouchesWhenObscured = true
+        apiKeyField.filterTouchesWhenObscured = true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            keyLayout.setAccessibilityDataSensitive(View.ACCESSIBILITY_DATA_SENSITIVE_YES)
+            apiKeyField.setAccessibilityDataSensitive(View.ACCESSIBILITY_DATA_SENSITIVE_YES)
+        }
     }
 
     private fun setClipHistoryEnabled(checked: Boolean) {

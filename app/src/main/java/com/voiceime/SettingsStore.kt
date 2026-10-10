@@ -10,7 +10,12 @@ class SettingsStore(context: Context) {
 
     companion object {
         const val DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-        const val DEFAULT_MODEL = "gemini-2.5-flash"
+        /**
+         * Default model for both the IME and floating button. This is the
+         * dedicated Gemini Live transcription model, so interim text starts
+         * arriving while the user is still speaking.
+         */
+        const val DEFAULT_MODEL = "gemini-3.5-transcribe-live"
 
         /** Max chars for the custom prompt; longer input is silently truncated on save. */
         const val MAX_CUSTOM_PROMPT = 2000

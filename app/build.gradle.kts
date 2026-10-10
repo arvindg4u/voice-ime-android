@@ -11,8 +11,8 @@ android {
         applicationId = "com.voiceime"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.5.0"
+        versionCode = 15
+        versionName = "1.6.2"
     }
 
     signingConfigs {

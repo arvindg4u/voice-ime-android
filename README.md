@@ -87,9 +87,17 @@ microphone:
 - **Live + batch transports** — REST `generateContent` by default, with
   WebSocket live-transport and Interactions-API routing per model, plus runtime
   fallback on transport mismatch.
-- **Resilient recording** — Stop button or 5-min auto-stop; mic teardown runs
+- **Resilient recording** — Stop button or 10-min auto-stop; mic teardown runs
   off the UI thread so Stop never janks; granting mic permission auto-resumes a
   pending tap; blocked-mic detection hints when another app holds the mic.
+- **System floating button** — Optional AccessibilityService mode shows a
+  draggable mic whenever a non-password editable field has input focus, with
+  the same edge-peek, restore, recording pulse, state colors, and focused-cursor
+  insertion pattern as the dedicated keyboard. It resolves input focus across
+  interactive windows so keyboard/handwriting surfaces don't hide a still-focused
+  editor. On S Pen tablets, hovering alone is not input focus; tap the field to
+  place the caret. It reuses this app's `AudioRecorder`, `SettingsStore`, and
+  `LlmClient`; it does not add a second backend.
 
 ---
 
@@ -125,18 +133,27 @@ microphone:
 # Actions → latest Android run → Artifacts → app-debug
 ```
 
-**4-step setup (on device):**
+**5-step setup (on device):**
 
 1. **Install** the APK and open the **Voice IME** app.
 2. **Configure** — enter **Base URL** (default
    `https://generativelanguage.googleapis.com/v1beta`), **API keys** (one per
-   line), and **Model** (e.g. `gemini-2.5-flash`), then **Save**. Tap **Test**
+   line), and **Model** (defaults to `gemini-3.5-transcribe-live`), then **Save**. Tap **Test**
    to verify with a 1-second 440 Hz tone.
-3. **Enable** — tap **Enable keyboard**, turn on **Voice IME** in system input
-   settings, and select it as the current keyboard (use the 🌐 switcher or the
-   back-button shortcut in the IME).
+3. **Enable keyboard** — tap **Enable keyboard**, turn on **Voice IME** in
+   Android's system keyboard/input-method settings, and select it as the current
+   keyboard (use the 🌐 switcher or the system keyboard switcher). The keyboard
+   does not require Accessibility or notification access.
 4. **Speak** — tap 🎙️ in any text field, talk, tap **Stop**. Grant microphone
    permission when prompted (a pending tap auto-resumes after grant).
+5. **Optional floating button** — tap **Enable floating button** and review the
+   in-app disclosure before opening Android Accessibility settings. If Android
+   blocks a sideloaded install, allow restricted settings for Voice IME first
+   (see [Android 16 permissions](docs/android-16-permissions.md)). The standard
+   keyboard works even when this optional service is off.
+
+See [`docs/floating-button.md`](docs/floating-button.md) for the accessibility
+boundary, runtime flow, and device-testing notes.
 
 ---
 
@@ -149,7 +166,7 @@ All settings live in the **Voice IME** settings activity and persist in
 | ----- | ----------------- | ------------ |
 | **Base URL** | `https://generativelanguage.googleapis.com/v1beta` | Gemini-compatible endpoint. Swap for a proxy or gateway without rebuilding. |
 | **API keys** | one key per line | Round-robin pool with 429 failover (see below). Keys are never logged. |
-| **Model** | `gemini-2.5-flash` | Model appended as `{baseUrl}/models/{model}:generateContent`. Live-marker models route to WebSocket; batch-transcription models route to the Interactions API. |
+| **Model** | `gemini-3.5-transcribe-live` | Dedicated Live transcription model by default. Live-marker models route to the existing BidiGenerateContent WebSocket; batch-transcription models route to the existing Interactions API. |
 | **Custom prompt** | blank (disabled) | System instructions (max 2000 chars) appended under a *"User preferences:"* heading to every request, including Test. |
 | **Smart mode** | off | Model-specific enhanced transcription path where supported. |
 
@@ -269,9 +286,9 @@ that gets out of the way.
 minSdk 26 / targetSdk 34 · Gradle Kotlin DSL · JDK 17.
 
 ```text
-app/src/main/java/com/voiceime/      # 16 sources
+app/src/main/java/com/voiceime/      # 20 sources
 ├── VoiceImeService.kt               # IME lifecycle, state machine, transport UI
-├── AudioRecorder.kt                 # AudioRecord capture → WAV, levels, 5-min cap
+├── AudioRecorder.kt                 # AudioRecord capture → WAV, levels, 10-min cap
 ├── LlmClient.kt                     # REST transcription + key rotation + fallback
 ├── LiveSocket.kt                    # WebSocket live transport
 ├── GeminiTransports.kt              # transport routing (live / interactions / REST)
@@ -283,6 +300,9 @@ app/src/main/java/com/voiceime/      # 16 sources
 │                                    # history persistence, model, retention rules
 ├── ClipboardHistoryActivity.kt      # history UI (pin / delete)
 ├── SettingsActivity.kt              # Base URL · keys · model · prompt · Test
+├── FloatingMicAccessibilityService.kt # Focus-driven system overlay host
+├── FloatingMicView.kt               # Deterministic overlay mic rendering
+├── FloatingMicPolicy.kt             # Testable visibility/peek geometry
 ├── SettingsStore.kt                 # EncryptedSharedPreferences wrapper
 └── MicPermissionActivity.kt         # permission grant → auto-resume pending tap
 
@@ -331,9 +351,9 @@ cd voice-ime-android
 
 | Layer | How |
 | ----- | --- |
-| Unit | `./gradlew testDebugUnitTest` — 6 suites: `AudioRecorder`, `LlmClient` (MockWebServer incl. 429-rotation), `ClipboardStore`, `ClipboardPolicy`, `ImeLayoutPolicy`, `LiveSessionGuard` |
+| Unit | `./gradlew testDebugUnitTest` — focused JVM suites cover `AudioRecorder`, `LlmClient` (MockWebServer incl. 429-rotation and raw WebSocket finalization-frame checks), `ClipboardStore`, `ClipboardPolicy`, `ImeLayoutPolicy`, `LiveSessionGuard`, and `FloatingMicPolicy` |
 | Manual Test button | Settings → **Test** sends the 440 Hz tone through the full pipeline with your keys/model/prompt |
-| Manual IME flows | fresh field → dictate → commit · password double-tap · airplane-mode error → retry · rotate keys with an invalid-first key · 5-min auto-stop |
+| Manual IME flows | fresh field → dictate → commit · password double-tap · airplane-mode error → retry · rotate keys with an invalid-first key · 10-min auto-stop |
 
 `WaveformView` itself is framework-bound (no unit tests by design) — its math
 lives in `ImeLayoutPolicy` where CI can reach it, and the compile gate keeps
@@ -343,10 +363,11 @@ the view honest.
 
 ## 📏 Limits
 
-- **Recording cap: 5 min.** At 16 kHz mono 16-bit (32 KB/s ≈ 1.9 MB/min WAV,
-  ×4/3 base64 ≈ 2.6 MB/min JSON) a full clip is ≈ 13 MB of request JSON —
-  comfortably under the 20 MB inline-audio ceiling. Gemini supports up to
-  1 hour; we stay well inside that.
+- **Recording cap: 10 min.** At 16 kHz mono 16-bit (32 KB/s ≈ 1.9 MB/min WAV,
+  ×4/3 base64 ≈ 2.6 MB/min JSON) a full clip is ≈ 26 MB if sent as one inline
+  request. The default Live Transcribe transport streams PCM instead, and its
+  documented session limit is 10 minutes; the local cap is shared by both
+  streaming and one-shot recorder flows.
 - **Network-bound** — transcription needs connectivity; offline shows an
   explicit network error with retry.
 - **Debug distribution** — install via APK/CI artifact; not on Google Play.
@@ -361,10 +382,21 @@ the view honest.
   (`security-crypto`); never logged (requests log host/model/size only).
 - **No backup, no screenshots** — `android:allowBackup=false`; settings sets
   `FLAG_SECURE`.
+- **Sensitive-key protection** — the API-key input is protected from obscured
+  taps and marked accessibility-data-sensitive on Android 14+; system
+  accessibility tools remain supported.
 - **Explicit consent** — `RECORD_AUDIO` is requested at use time; password
-  fields need a deliberate second tap.
-- **Minimal permissions** — only `INTERNET` + `RECORD_AUDIO`. No contacts,
-  location, or storage access.
+  fields need a deliberate second tap and are never eligible for the floating
+  button. The optional floating mode requires explicit Accessibility-service
+  opt-in.
+- **Minimal permissions** — only `INTERNET` + `RECORD_AUDIO` are declared; no
+  notification posting or notification-listener access is used. The optional
+  floating service is protected by `BIND_ACCESSIBILITY_SERVICE`, receives
+  editor click/focus, selection, and window-transition events (not text- or
+  content-change events), and rejects password fields. It may read the
+  current non-password field and selection solely to preserve the insertion
+  point; existing field text is not sent to the transcription API or logged.
+  No contacts, location, or storage access.
 
 > Found a vulnerability? Please open a **private security advisory** on GitHub
 > instead of a public issue.
@@ -403,10 +435,38 @@ while recording. Very short taps (< ~0.5 s) may capture no audio.
 </details>
 
 <details>
+<summary><strong>Floating mic doesn't appear / Accessibility access is blocked</strong></summary>
+
+The optional floating button needs the **Voice IME floating button** service
+turned on in Android Accessibility settings. If Android 13+ blocks it for an
+APK installed from outside a trusted app store, allow restricted settings in
+**Settings → Apps → Voice IME → ⋮ → Allow restricted settings**, authenticate
+if asked, then return to Accessibility and enable the service. If that menu item
+is missing, first try the Accessibility toggle once and dismiss Android's
+restricted-setting warning, then check App info again. OEM menu names vary; only
+allow this if you trust the app. On S Pen tablets, tap the text field—hovering
+alone does not create input focus. The icon stays at its draggable saved screen
+position; it is not attached to the pen pointer. The standard keyboard works
+without the floating service. See [Android 16 permissions and setup](docs/android-16-permissions.md)
+and [the floating-button guide](docs/floating-button.md).
+</details>
+
+<details>
+<summary><strong>Notifications are disabled or not working</strong></summary>
+
+Voice IME currently does not post notifications and does not read other apps'
+notifications. It therefore does not request `POST_NOTIFICATIONS` or
+Notification access. This is unrelated to enabling the optional Accessibility
+service for the floating mic.
+</details>
+
+<details>
 <summary><strong>Keyboard doesn't appear in the list</strong></summary>
 
-Open the Voice IME app → **Enable keyboard** → toggle it on in system settings
-→ switch via the 🌐 key or system keyboard switcher.
+Open the Voice IME app → **Enable keyboard** → enable Voice IME under Android's
+**Keyboard / On-screen keyboard / Input methods** settings, then select it with
+the system keyboard switcher. This is separate from Accessibility settings;
+notification access is not required.
 </details>
 
 <details>
@@ -428,7 +488,7 @@ Issues and PRs are welcome — this is a small, focused codebase and it shows.
 ./gradlew assembleDebug       # must build
 ```
 
-- **Issues:** include device, Android version, app version (`1.4.1`), model,
+- **Issues:** include device, Android version, app version (`1.6.2`), model,
   and the exact toast/error string.
 - **PRs:** keep the voice-only concept; match M3 dynamic-color tokens; add or
   update unit tests for logic changes; keep functions focused and state explicit.
