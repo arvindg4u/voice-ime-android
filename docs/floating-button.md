@@ -88,10 +88,31 @@ final/interim handling, and cancellation.
   can stop or cancel safely.
 - **Password field:** no button is shown and no target node is retained.
 
-The service subscribes only to focus, selection, and window-transition events.
-It does not subscribe to content-change events, poll the accessibility tree, or
-log text/content descriptions. The overlay is hidden over the app's own
-settings screens; Voice IME's normal keyboard remains available there.
+The service subscribes only to click, input-focus, text-selection, and
+window-transition events. It does not subscribe to text/content-change events,
+poll the accessibility tree, or log event text/content descriptions. For focus
+resolution it uses `AccessibilityService.findFocus(FOCUS_INPUT)` across
+interactive windows, with an active-window fallback. A short, bounded retry
+and a refresh of the retained editor node avoid hiding the button during brief
+keyboard/window hand-offs without leaving a stale target visible. This is
+particularly useful when Samsung Keyboard or the handwriting surface takes
+the active window while the editor remains input-focused.
+
+### Samsung tablets and S Pen
+
+On Galaxy tablets, **S Pen hover/Air view is a pointer preview, not input focus**.
+Tap the text field with the S Pen to place the caret; hovering over it alone
+should not open the mic. Samsung's **S Pen to text** handwriting mode can
+change which IME window is active, so focus is resolved across windows rather
+than only from the active window. The mic remains at its draggable, saved
+screen position; editor focus controls whether it is shown, while dictation is
+inserted at the editor's current selection. It is not attached to the S Pen
+hover pointer. Samsung documents [S Pen hover and tablet input settings](https://www.samsung.com/ca/support/mobile-devices/galaxy-tablet-use-the-s-pen/)
+and [Tab S10 FE S Pen to text](https://www.samsung.com/us/support/answer/ANS10005059/);
+Android documents [input-focus lookup](https://developer.android.com/reference/android/accessibilityservice/AccessibilityService#findFocus(int)).
+
+The overlay is hidden over the app's own settings screens; Voice IME's normal
+keyboard remains available there.
 
 ## Android setup for testing
 
@@ -102,15 +123,20 @@ settings screens; Voice IME's normal keyboard remains available there.
    Android 13+ blocks the setting for a sideloaded APK, open **Settings → Apps
    → Voice IME → ⋮ → Allow restricted settings**, authenticate if prompted,
    return to Accessibility settings, and enable the service. OEM labels vary.
-5. Open an app with a regular text field, place the cursor, and wait for the
-   mic to appear. Notification access is not needed.
+5. Open an app with a regular text field and tap it to place the caret; on a
+   Galaxy tablet, S Pen hover alone does not create input focus. Wait briefly
+   for the mic after the keyboard or handwriting surface opens. Notification
+   access is not needed.
 6. Grant microphone permission on the first tap, speak, and tap the button to
    finish.
 
 Some custom editors do not expose `ACTION_SET_TEXT` or `ACTION_PASTE`. The
 implementation reports a clipboard fallback instead of claiming insertion
 succeeded. Real-device validation is required for OEM keyboards, Compose
-editors, terminal surfaces, split-screen, and foldables.
+editors, terminal surfaces, split-screen, and foldables. On a Galaxy Tab S10 FE,
+validate finger tap, S Pen tap, S Pen-to-text handwriting, hover-only (no mic),
+Samsung Keyboard/other IME changes, rotation, and split-screen. The sandbox has
+no physical Samsung device, so OEM behavior still needs this device check.
 
 ## Research note
 

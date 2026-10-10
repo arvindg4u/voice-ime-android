@@ -63,6 +63,9 @@ class FloatingMicAccessibilityService : AccessibilityService() {
         private const val LIVE_PREVIEW_MAX_CHARS = 140
         private const val LIVE_FINAL_TIMEOUT_MS = 12_000L
         private const val RECORD_CAP_MS = AudioRecorder.MAX_DURATION_MS
+        private const val FOCUS_REFRESH_DELAY_MS = 90L
+        private const val FOCUS_REFRESH_RETRY_DELAY_MS = 140L
+        private const val FOCUS_REFRESH_MAX_RETRIES = 2
 
         @Volatile
         private var connectedInstance: FloatingMicAccessibilityService? = null
@@ -95,6 +98,7 @@ class FloatingMicAccessibilityService : AccessibilityService() {
     private var liveSessionId = 0L
 
     private var targetNode: AccessibilityNodeInfo? = null
+    private var focusRefreshRetries = 0
 
     private var button: FloatingMicView? = null
     private var feedback: TextView? = null
@@ -132,16 +136,15 @@ class FloatingMicAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED,
             AccessibilityEvent.TYPE_VIEW_FOCUSED,
-            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED -> {
-                updateTargetFromEvent(event.source)
-            }
-
+            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
-                // Window transitions deliver the focused editor a moment after
-                // the window event on several OEMs. One posted refresh avoids
-                // polling and still handles dialogs/split-screen changes.
+                // Resolve the current INPUT focus instead of trusting an
+                // event's source node. Samsung's keyboard/handwriting windows
+                // can become active during S Pen input while the editor keeps
+                // input focus in another interactive window.
                 scheduleFocusRefresh()
             }
         }
@@ -169,86 +172,123 @@ class FloatingMicAccessibilityService : AccessibilityService() {
     }
 
     private fun scheduleFocusRefresh() {
+        focusRefreshRetries = 0
         mainHandler.removeCallbacks(refreshFocusRunnable)
-        mainHandler.postDelayed(refreshFocusRunnable, 100L)
+        mainHandler.postDelayed(refreshFocusRunnable, FOCUS_REFRESH_DELAY_MS)
     }
 
     private val refreshFocusRunnable = Runnable { refreshFocusedEditor() }
 
-    /** Refreshes from the framework's current input focus without scraping the window tree. */
+    /**
+     * Resolves INPUT focus across interactive windows. The Samsung keyboard or
+     * handwriting surface can be the active window while the editor remains
+     * focused in the app window, so rootInActiveWindow alone is insufficient.
+     */
     private fun refreshFocusedEditor() {
+        val candidate = findInputFocusedNode()
+        if (candidate != null) {
+            if (isEligibleEditor(candidate, inputFocusConfirmed = true)) {
+                applyCandidate(candidate)
+                return
+            }
+            recycleNode(candidate)
+        }
+
+        // Keep the current editor through short Samsung IME/window hand-offs
+        // when its node still reports input focus. Retry only a bounded number
+        // of times; a real focus loss must hide the button promptly.
+        if (targetNodeIsStillFocused()) {
+            focusRefreshRetries = 0
+            return
+        }
+        if (focusRefreshRetries < FOCUS_REFRESH_MAX_RETRIES) {
+            focusRefreshRetries += 1
+            mainHandler.removeCallbacks(refreshFocusRunnable)
+            mainHandler.postDelayed(
+                refreshFocusRunnable,
+                FOCUS_REFRESH_RETRY_DELAY_MS * focusRefreshRetries,
+            )
+        } else {
+            focusRefreshRetries = 0
+            clearTarget()
+        }
+    }
+
+    /** Uses the service-wide focus query first, then the active-window fallback. */
+    private fun findInputFocusedNode(): AccessibilityNodeInfo? {
+        val acrossWindows = try {
+            findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        } catch (_: Exception) {
+            null
+        }
+        if (acrossWindows != null) return acrossWindows
+
         val root = try {
             rootInActiveWindow
         } catch (_: Exception) {
             null
-        } ?: run {
-            clearTarget()
-            return
-        }
-
+        } ?: return null
         var focused: AccessibilityNodeInfo? = null
-        try {
+        return try {
             focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            val copy = focused?.let { AccessibilityNodeInfo.obtain(it) }
-            applyCandidate(copy)
-        } catch (_: Exception) {
-            clearTarget()
-        } finally {
-            try {
-                focused?.recycle()
-                root.recycle()
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    /** Takes ownership of [source] and recycles the event-owned node. */
-    private fun updateTargetFromEvent(source: AccessibilityNodeInfo?) {
-        if (source == null) {
-            clearTarget()
-            scheduleFocusRefresh()
-            return
-        }
-        val copy = try {
-            AccessibilityNodeInfo.obtain(source)
+            focused?.let { AccessibilityNodeInfo.obtain(it) }
         } catch (_: Exception) {
             null
         } finally {
-            try {
-                source.recycle()
-            } catch (_: Exception) {
-            }
+            if (focused !== root) recycleNode(focused)
+            recycleNode(root)
         }
-        applyCandidate(copy)
     }
 
-    /** Applies the minimum target contract used by the overlay and insertion path. */
-    private fun applyCandidate(candidate: AccessibilityNodeInfo?) {
-        if (candidate == null) {
-            clearTarget()
-            return
+    private fun targetNodeIsStillFocused(): Boolean {
+        val current = targetNode?.let { node ->
+            try {
+                AccessibilityNodeInfo.obtain(node)
+            } catch (_: Exception) {
+                null
+            }
+        } ?: return false
+        return try {
+            current.refresh() && isEligibleEditor(current, inputFocusConfirmed = false)
+        } catch (_: Exception) {
+            false
+        } finally {
+            recycleNode(current)
         }
-        val packageName = candidate.packageName?.toString()
-        val eligible = FloatingMicPolicy.shouldShowForEditor(
+    }
+
+    private fun isEligibleEditor(
+        candidate: AccessibilityNodeInfo,
+        inputFocusConfirmed: Boolean,
+    ): Boolean = try {
+        val candidatePackage = candidate.packageName?.toString()
+        FloatingMicPolicy.shouldShowForEditor(
             isEditable = candidate.isEditable,
             isFocused = candidate.isFocused,
             isPassword = candidate.isPassword,
-            packageName = packageName,
+            packageName = candidatePackage,
             ownPackageName = packageName(),
+            inputFocusConfirmed = inputFocusConfirmed,
         )
-        if (!eligible) {
-            try {
-                candidate.recycle()
-            } catch (_: Exception) {
-            }
-            clearTarget()
-            return
-        }
+    } catch (_: Exception) {
+        false
+    }
 
+    /** Takes ownership of a node confirmed to be an eligible focused editor. */
+    private fun applyCandidate(candidate: AccessibilityNodeInfo) {
+        focusRefreshRetries = 0
+        mainHandler.removeCallbacks(refreshFocusRunnable)
         replaceTarget(candidate)
         showOverlayIfNeeded()
         if (isPeeked) restoreFromPeek()
         armIdlePeekTimer()
+    }
+
+    private fun recycleNode(node: AccessibilityNodeInfo?) {
+        try {
+            node?.recycle()
+        } catch (_: Exception) {
+        }
     }
 
     private fun packageName(): String = applicationContext.packageName
@@ -262,6 +302,8 @@ class FloatingMicAccessibilityService : AccessibilityService() {
     }
 
     private fun clearTarget() {
+        focusRefreshRetries = 0
+        mainHandler.removeCallbacks(refreshFocusRunnable)
         // A focus change while recording must not leave a stale live
         // hypothesis bubble attached to the old editor.
         if (state == State.RECORDING || state == State.TRANSCRIBING) hideFeedback()

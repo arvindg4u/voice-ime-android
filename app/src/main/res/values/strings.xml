@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Voice IME</string>
     <string name="accessibility_service_label">Voice IME floating button</string>
-    <string name="accessibility_description">Shows a mic over a focused, non-password text field. It may inspect that field’s current text and selection only to insert dictation at the cursor. It never logs or sends existing field text and does not access notifications.</string>
+    <string name="accessibility_description">Shows a mic for a focused, non-password text field. It may inspect that field’s current text and selection only to insert dictation at the cursor. Stylus hover alone is not input focus. It never logs or sends existing field text and does not access notifications.</string>
 
     <!-- IME view -->
     <string name="ime_mic_description">Start recording</string>
@@ -62,9 +62,9 @@
     <string name="settings_section_floating">Floating button</string>
     <string name="settings_floating_status_off">Off — the optional floating mic needs its Accessibility service enabled in Android settings.</string>
     <string name="settings_floating_status_on">On — the optional focused-editor Accessibility service is enabled.</string>
-    <string name="settings_floating_setup_note">The floating mic needs Accessibility access to find the focused non-password field and insert dictated text. It may inspect that field’s current text and selection only for cursor-aware insertion; existing text is not sent to the transcription API. No notification access is used. On Android 13+ a sideloaded APK may need Settings → Apps → Voice IME → ⋮ → Allow restricted settings before you can enable the service.</string>
+    <string name="settings_floating_setup_note">The floating mic follows the focused non-password text field. On tablets, tap with the S Pen or stylus to place the caret; hovering alone does not give the field input focus. The service tracks input focus across keyboard and handwriting windows. It may inspect the field’s current text and selection only for cursor-aware insertion; existing text is not sent to the transcription API. No notification access is used. On Android 13+ a sideloaded APK may need Settings → Apps → Voice IME → ⋮ → Allow restricted settings. If that menu item is missing, try the Accessibility toggle once and dismiss Android’s warning, then check App info again.</string>
     <string name="settings_floating_disclosure_title">Enable the floating mic?</string>
-    <string name="settings_floating_disclosure_message">Android Accessibility access lets the optional floating mic locate the focused editor and insert your dictated text. It may inspect the current non-password field text and selection to preserve the cursor position, but does not send existing text to the transcription API, log it, or access notifications. Password fields are excluded. Dictated audio is sent to your configured transcription API. On Android 13+ a sideloaded APK may first need Settings → Apps → Voice IME → ⋮ → Allow restricted settings. Continue only if you trust this app.</string>
+    <string name="settings_floating_disclosure_message">Android Accessibility access lets the optional floating mic locate the focused editor and insert your dictated text. On tablets, stylus hover alone is not input focus; tap the text field to place the caret. It may inspect the current non-password field text and selection to preserve the cursor position, but does not send existing text to the transcription API, log it, or access notifications. Password fields are excluded. Dictated audio is sent to your configured transcription API. On Android 13+ a sideloaded APK may first need Settings → Apps → Voice IME → ⋮ → Allow restricted settings. Continue only if you trust this app.</string>
     <string name="settings_floating_disclosure_app_info">Open app info</string>
     <string name="settings_floating_disclosure_continue">Accessibility settings</string>
     <string name="settings_enable_floating">Enable floating button</string>

@@ -91,11 +91,13 @@ microphone:
   off the UI thread so Stop never janks; granting mic permission auto-resumes a
   pending tap; blocked-mic detection hints when another app holds the mic.
 - **System floating button** — Optional AccessibilityService mode shows a
-  draggable mic whenever a non-password editable field has focus, with the
-  same edge-peek, restore, recording pulse, state colors, and focused-cursor
-  insertion pattern as the dedicated keyboard. It reuses this app's
-  `AudioRecorder`, `SettingsStore`, and `LlmClient`; it does not add a second
-  backend.
+  draggable mic whenever a non-password editable field has input focus, with
+  the same edge-peek, restore, recording pulse, state colors, and focused-cursor
+  insertion pattern as the dedicated keyboard. It resolves input focus across
+  interactive windows so keyboard/handwriting surfaces don't hide a still-focused
+  editor. On S Pen tablets, hovering alone is not input focus; tap the field to
+  place the caret. It reuses this app's `AudioRecorder`, `SettingsStore`, and
+  `LlmClient`; it does not add a second backend.
 
 ---
 
@@ -390,8 +392,8 @@ the view honest.
 - **Minimal permissions** — only `INTERNET` + `RECORD_AUDIO` are declared; no
   notification posting or notification-listener access is used. The optional
   floating service is protected by `BIND_ACCESSIBILITY_SERVICE`, receives
-  focused-editor, selection, and window-transition events (not text-change
-  events), and rejects password fields. It may read the
+  editor click/focus, selection, and window-transition events (not text- or
+  content-change events), and rejects password fields. It may read the
   current non-password field and selection solely to preserve the insertion
   point; existing field text is not sent to the transcription API or logged.
   No contacts, location, or storage access.
@@ -437,11 +439,16 @@ while recording. Very short taps (< ~0.5 s) may capture no audio.
 
 The optional floating button needs the **Voice IME floating button** service
 turned on in Android Accessibility settings. If Android 13+ blocks it for an
-APK installed from outside a trusted app store, first open **Settings → Apps →
-Voice IME → ⋮ → Allow restricted settings**, authenticate if asked, then return
-to **Enable floating button** and turn on the service. OEM menu names vary.
-Only do this if you trust the app. The standard keyboard continues to work
-without the floating service. See [Android 16 permissions and setup](docs/android-16-permissions.md).
+APK installed from outside a trusted app store, allow restricted settings in
+**Settings → Apps → Voice IME → ⋮ → Allow restricted settings**, authenticate
+if asked, then return to Accessibility and enable the service. If that menu item
+is missing, first try the Accessibility toggle once and dismiss Android's
+restricted-setting warning, then check App info again. OEM menu names vary; only
+allow this if you trust the app. On S Pen tablets, tap the text field—hovering
+alone does not create input focus. The icon stays at its draggable saved screen
+position; it is not attached to the pen pointer. The standard keyboard works
+without the floating service. See [Android 16 permissions and setup](docs/android-16-permissions.md)
+and [the floating-button guide](docs/floating-button.md).
 </details>
 
 <details>
@@ -481,7 +488,7 @@ Issues and PRs are welcome — this is a small, focused codebase and it shows.
 ./gradlew assembleDebug       # must build
 ```
 
-- **Issues:** include device, Android version, app version (`1.6.1`), model,
+- **Issues:** include device, Android version, app version (`1.6.2`), model,
   and the exact toast/error string.
 - **PRs:** keep the voice-only concept; match M3 dynamic-color tokens; add or
   update unit tests for logic changes; keep functions focused and state explicit.

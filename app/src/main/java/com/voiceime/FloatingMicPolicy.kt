@@ -27,8 +27,9 @@ object FloatingMicPolicy {
         isPassword: Boolean,
         packageName: String?,
         ownPackageName: String,
+        inputFocusConfirmed: Boolean = false,
     ): Boolean =
-        isEditable && isFocused && !isPassword && packageName != ownPackageName
+        isEditable && (isFocused || inputFocusConfirmed) && !isPassword && packageName != ownPackageName
 
     /**
      * AccessibilityNodeInfo implementations sometimes expose an editor hint

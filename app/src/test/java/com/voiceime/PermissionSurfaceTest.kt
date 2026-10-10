@@ -2,6 +2,7 @@ package com.voiceime
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.view.accessibility.AccessibilityEvent
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -14,6 +15,30 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class PermissionSurfaceTest {
+
+    @Test
+    fun `floating service tracks editor interaction without text-change or content-change events`() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val parser = context.resources.getXml(R.xml.accessibility_service_config)
+        try {
+            while (parser.eventType != org.xmlpull.v1.XmlPullParser.START_TAG) parser.next()
+            val androidNamespace = "http://schemas.android.com/apk/res/android"
+            val eventTypes = parser.getAttributeIntValue(
+                androidNamespace,
+                "accessibilityEventTypes",
+                0,
+            )
+            assertTrue((eventTypes and AccessibilityEvent.TYPE_VIEW_CLICKED) != 0)
+            assertTrue((eventTypes and AccessibilityEvent.TYPE_VIEW_FOCUSED) != 0)
+            assertTrue((eventTypes and AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED) != 0)
+            assertTrue((eventTypes and AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) != 0)
+            assertTrue((eventTypes and AccessibilityEvent.TYPE_WINDOWS_CHANGED) != 0)
+            assertFalse((eventTypes and AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) != 0)
+            assertFalse((eventTypes and AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) != 0)
+        } finally {
+            parser.close()
+        }
+    }
 
     @Test
     fun `floating service is system-bound while notification access is absent`() {

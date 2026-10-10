@@ -17,6 +17,40 @@ class FloatingMicPolicyTest {
     }
 
     @Test
+    fun `service-wide input focus is authoritative while password guard remains enforced`() {
+        assertTrue(
+            FloatingMicPolicy.shouldShowForEditor(
+                isEditable = true,
+                isFocused = false,
+                isPassword = false,
+                packageName = "other.app",
+                ownPackageName = "com.voiceime",
+                inputFocusConfirmed = true,
+            ),
+        )
+        assertFalse(
+            FloatingMicPolicy.shouldShowForEditor(
+                isEditable = true,
+                isFocused = false,
+                isPassword = true,
+                packageName = "other.app",
+                ownPackageName = "com.voiceime",
+                inputFocusConfirmed = true,
+            ),
+        )
+        assertFalse(
+            FloatingMicPolicy.shouldShowForEditor(
+                isEditable = true,
+                isFocused = false,
+                isPassword = false,
+                packageName = "com.voiceime",
+                ownPackageName = "com.voiceime",
+                inputFocusConfirmed = true,
+            ),
+        )
+    }
+
+    @Test
     fun `peek restores before one second and keeps the slide animation short`() {
         assertTrue(FloatingMicPolicy.PEEK_RESTORE_DELAY_MS + FloatingMicPolicy.PEEK_ANIMATION_MS < 1_000L)
     }
