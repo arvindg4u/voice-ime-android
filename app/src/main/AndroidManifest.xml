@@ -30,11 +30,12 @@
         </service>
 
         <!-- The floating button is an accessibility overlay, not a generic
-             SYSTEM_ALERT_WINDOW window. Android binds this service only after
-             the user explicitly enables it in Accessibility settings. -->
+             SYSTEM_ALERT_WINDOW window. The service must be exported for the
+             system to bind it; BIND_ACCESSIBILITY_SERVICE prevents other apps
+             from binding. Android enables it only after explicit user consent. -->
         <service
             android:name=".FloatingMicAccessibilityService"
-            android:exported="false"
+            android:exported="true"
             android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>

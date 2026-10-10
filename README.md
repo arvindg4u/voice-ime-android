@@ -131,22 +131,24 @@ microphone:
 # Actions → latest Android run → Artifacts → app-debug
 ```
 
-**4-step setup (on device):**
+**5-step setup (on device):**
 
 1. **Install** the APK and open the **Voice IME** app.
 2. **Configure** — enter **Base URL** (default
    `https://generativelanguage.googleapis.com/v1beta`), **API keys** (one per
    line), and **Model** (defaults to `gemini-3.5-transcribe-live`), then **Save**. Tap **Test**
    to verify with a 1-second 440 Hz tone.
-3. **Enable** — tap **Enable keyboard**, turn on **Voice IME** in system input
-   settings, and select it as the current keyboard (use the 🌐 switcher or the
-   back-button shortcut in the IME).
+3. **Enable keyboard** — tap **Enable keyboard**, turn on **Voice IME** in
+   Android's system keyboard/input-method settings, and select it as the current
+   keyboard (use the 🌐 switcher or the system keyboard switcher). The keyboard
+   does not require Accessibility or notification access.
 4. **Speak** — tap 🎙️ in any text field, talk, tap **Stop**. Grant microphone
    permission when prompted (a pending tap auto-resumes after grant).
-5. **Optional floating button** — from Voice IME settings tap **Enable floating
-   button**, enable **Voice IME floating button** in Android Accessibility
-   settings, then place a cursor in any regular text field. The button follows
-   the focused editor even when Voice IME is not the selected keyboard.
+5. **Optional floating button** — tap **Enable floating button** and review the
+   in-app disclosure before opening Android Accessibility settings. If Android
+   blocks a sideloaded install, allow restricted settings for Voice IME first
+   (see [Android 16 permissions](docs/android-16-permissions.md)). The standard
+   keyboard works even when this optional service is off.
 
 See [`docs/floating-button.md`](docs/floating-button.md) for the accessibility
 boundary, runtime flow, and device-testing notes.
@@ -378,13 +380,21 @@ the view honest.
   (`security-crypto`); never logged (requests log host/model/size only).
 - **No backup, no screenshots** — `android:allowBackup=false`; settings sets
   `FLAG_SECURE`.
+- **Sensitive-key protection** — the API-key input is protected from obscured
+  taps and marked accessibility-data-sensitive on Android 14+; system
+  accessibility tools remain supported.
 - **Explicit consent** — `RECORD_AUDIO` is requested at use time; password
-  fields never show the floating button. The optional floating mode also
-  requires the user to enable its AccessibilityService explicitly.
-- **Minimal permissions** — only `INTERNET` + `RECORD_AUDIO` are declared.
-  Accessibility access is opt-in, focused-editor-only, and not a generic
-  screen-reading or content-change subscription. No contacts, location, or
-  storage access.
+  fields need a deliberate second tap and are never eligible for the floating
+  button. The optional floating mode requires explicit Accessibility-service
+  opt-in.
+- **Minimal permissions** — only `INTERNET` + `RECORD_AUDIO` are declared; no
+  notification posting or notification-listener access is used. The optional
+  floating service is protected by `BIND_ACCESSIBILITY_SERVICE`, receives
+  focused-editor, selection, and window-transition events (not text-change
+  events), and rejects password fields. It may read the
+  current non-password field and selection solely to preserve the insertion
+  point; existing field text is not sent to the transcription API or logged.
+  No contacts, location, or storage access.
 
 > Found a vulnerability? Please open a **private security advisory** on GitHub
 > instead of a public issue.
@@ -423,19 +433,33 @@ while recording. Very short taps (< ~0.5 s) may capture no audio.
 </details>
 
 <details>
-<summary><strong>Floating mic doesn't appear</strong></summary>
+<summary><strong>Floating mic doesn't appear / Accessibility access is blocked</strong></summary>
 
-Open Voice IME → **Enable floating button**, enable **Voice IME floating
-button** in Android Accessibility settings, then place the cursor in a regular
-editable field. The service intentionally hides itself over Voice IME settings,
-password fields, and apps that do not expose a focused editable node.
+The optional floating button needs the **Voice IME floating button** service
+turned on in Android Accessibility settings. If Android 13+ blocks it for an
+APK installed from outside a trusted app store, first open **Settings → Apps →
+Voice IME → ⋮ → Allow restricted settings**, authenticate if asked, then return
+to **Enable floating button** and turn on the service. OEM menu names vary.
+Only do this if you trust the app. The standard keyboard continues to work
+without the floating service. See [Android 16 permissions and setup](docs/android-16-permissions.md).
+</details>
+
+<details>
+<summary><strong>Notifications are disabled or not working</strong></summary>
+
+Voice IME currently does not post notifications and does not read other apps'
+notifications. It therefore does not request `POST_NOTIFICATIONS` or
+Notification access. This is unrelated to enabling the optional Accessibility
+service for the floating mic.
 </details>
 
 <details>
 <summary><strong>Keyboard doesn't appear in the list</strong></summary>
 
-Open the Voice IME app → **Enable keyboard** → toggle it on in system settings
-→ switch via the 🌐 key or system keyboard switcher.
+Open the Voice IME app → **Enable keyboard** → enable Voice IME under Android's
+**Keyboard / On-screen keyboard / Input methods** settings, then select it with
+the system keyboard switcher. This is separate from Accessibility settings;
+notification access is not required.
 </details>
 
 <details>
@@ -457,7 +481,7 @@ Issues and PRs are welcome — this is a small, focused codebase and it shows.
 ./gradlew assembleDebug       # must build
 ```
 
-- **Issues:** include device, Android version, app version (`1.4.1`), model,
+- **Issues:** include device, Android version, app version (`1.6.1`), model,
   and the exact toast/error string.
 - **PRs:** keep the voice-only concept; match M3 dynamic-color tokens; add or
   update unit tests for logic changes; keep functions focused and state explicit.

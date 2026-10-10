@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">Voice IME</string>
     <string name="accessibility_service_label">Voice IME floating button</string>
-    <string name="accessibility_description">Shows a mic button when an editable text field has focus and inserts your dictated text at the cursor. It does not read password fields or log text.</string>
+    <string name="accessibility_description">Shows a mic over a focused, non-password text field. It may inspect that field’s current text and selection only to insert dictation at the cursor. It never logs or sends existing field text and does not access notifications.</string>
 
     <!-- IME view -->
     <string name="ime_mic_description">Start recording</string>
@@ -45,6 +45,13 @@
     <string name="settings_save">Save</string>
     <string name="settings_test">Test</string>
     <string name="settings_enable_keyboard">Enable keyboard</string>
+    <string name="settings_keyboard_status_disabled">Keyboard not enabled. Turn on Voice IME in Android’s keyboard settings.</string>
+    <string name="settings_keyboard_status_enabled">Keyboard enabled. Select Voice IME from the system keyboard switcher to use it.</string>
+    <string name="settings_keyboard_status_selected">Voice IME is your current keyboard.</string>
+    <string name="settings_keyboard_setup_note">Keyboard setup is separate from the optional floating button. Standard keyboard input does not need Accessibility or notification access. Microphone permission is requested only when you tap the mic.</string>
+    <string name="settings_keyboard_settings_unavailable">Couldn’t open keyboard settings. Open Android Settings and search for “On-screen keyboard”.</string>
+    <string name="settings_accessibility_settings_unavailable">Couldn’t open Accessibility settings. Open Android Settings and search for “Accessibility”.</string>
+    <string name="settings_app_info_unavailable">Couldn’t open app details. Open Settings → Apps → Voice IME manually.</string>
     <string name="settings_saved">Settings saved</string>
     <string name="settings_saved_test_hint">Settings saved — test from keyboard</string>
     <string name="settings_missing_key">Enter API key and base URL first</string>
@@ -53,9 +60,15 @@
     <string name="mic_needed">Microphone needed for voice input</string>
     <string name="settings_section_connection">Connection</string>
     <string name="settings_section_floating">Floating button</string>
-    <string name="settings_floating_status_off">Off — enable the accessibility service to show the mic at your cursor.</string>
-    <string name="settings_floating_status_on">On — the mic appears over focused editable fields.</string>
+    <string name="settings_floating_status_off">Off — the optional floating mic needs its Accessibility service enabled in Android settings.</string>
+    <string name="settings_floating_status_on">On — the optional focused-editor Accessibility service is enabled.</string>
+    <string name="settings_floating_setup_note">The floating mic needs Accessibility access to find the focused non-password field and insert dictated text. It may inspect that field’s current text and selection only for cursor-aware insertion; existing text is not sent to the transcription API. No notification access is used. On Android 13+ a sideloaded APK may need Settings → Apps → Voice IME → ⋮ → Allow restricted settings before you can enable the service.</string>
+    <string name="settings_floating_disclosure_title">Enable the floating mic?</string>
+    <string name="settings_floating_disclosure_message">Android Accessibility access lets the optional floating mic locate the focused editor and insert your dictated text. It may inspect the current non-password field text and selection to preserve the cursor position, but does not send existing text to the transcription API, log it, or access notifications. Password fields are excluded. Dictated audio is sent to your configured transcription API. On Android 13+ a sideloaded APK may first need Settings → Apps → Voice IME → ⋮ → Allow restricted settings. Continue only if you trust this app.</string>
+    <string name="settings_floating_disclosure_app_info">Open app info</string>
+    <string name="settings_floating_disclosure_continue">Accessibility settings</string>
     <string name="settings_enable_floating">Enable floating button</string>
+    <string name="settings_manage_floating">Manage floating button access</string>
     <string name="settings_section_personalize">Personalize</string>
     <string name="settings_section_clipboard">Clipboard</string>
     <string name="settings_clipboard_history">Save clipboard history</string>

@@ -50,7 +50,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="@string/settings_api_key_hint"
-                android:inputType="textMultiLine"
+                android:inputType="textPassword|textMultiLine"
                 android:minLines="2" />
         </com.google.android.material.textfield.TextInputLayout>
 
@@ -93,6 +93,14 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
             android:text="@string/settings_enable_floating" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/settings_floating_setup_note"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:textColor="?attr/colorOnSurfaceVariant" />
 
         <TextView
             android:layout_width="match_parent"
@@ -235,5 +243,22 @@
                 android:layout_weight="1"
                 android:text="@string/settings_enable_keyboard" />
         </LinearLayout>
+
+        <TextView
+            android:id="@+id/settingsKeyboardStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:accessibilityLiveRegion="polite"
+            android:text="@string/settings_keyboard_status_disabled"
+            android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/settings_keyboard_setup_note"
+            android:textAppearance="?attr/textAppearanceBodySmall"
+            android:textColor="?attr/colorOnSurfaceVariant" />
     </LinearLayout>
 </ScrollView>

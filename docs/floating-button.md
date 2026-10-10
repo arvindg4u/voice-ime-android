@@ -16,7 +16,15 @@ open needs two Android capabilities that an IME does not have:
 
 The user must explicitly enable **Voice IME floating button** under Android's
 Accessibility settings. This is not a generic `SYSTEM_ALERT_WINDOW` overlay
-and the app does not request that permission.
+and the app does not request that permission. The service is exported so the
+system can bind to it and is guarded by `BIND_ACCESSIBILITY_SERVICE`, which
+prevents ordinary apps from binding.
+
+Before opening system settings, the app discloses that the service can inspect
+the focused non-password field and its selection to preserve the cursor when
+inserting a transcript. Existing editor text is never sent to the transcription
+API or logged; password fields are rejected, and notification access is not
+used.
 
 ## Runtime flow
 
@@ -90,9 +98,12 @@ settings screens; Voice IME's normal keyboard remains available there.
 1. Open Voice IME settings and configure the existing backend credentials.
 2. Set the model to `gemini-3.5-transcribe-live` (the default for new installs).
 3. Tap **Enable floating button**.
-4. Enable **Voice IME floating button** in Android Accessibility settings.
+4. Enable **Voice IME floating button** in Android Accessibility settings. If
+   Android 13+ blocks the setting for a sideloaded APK, open **Settings → Apps
+   → Voice IME → ⋮ → Allow restricted settings**, authenticate if prompted,
+   return to Accessibility settings, and enable the service. OEM labels vary.
 5. Open an app with a regular text field, place the cursor, and wait for the
-   mic to appear.
+   mic to appear. Notification access is not needed.
 6. Grant microphone permission on the first tap, speak, and tap the button to
    finish.
 
