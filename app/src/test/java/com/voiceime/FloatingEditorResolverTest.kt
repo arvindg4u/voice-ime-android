@@ -1,7 +1,6 @@
 package com.voiceime
 
 import android.accessibilityservice.AccessibilityService
-import android.content.Intent
 import android.text.InputType
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
@@ -27,10 +26,9 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class FloatingEditorResolverTest {
 
-    private class StubAccessibilityService : AccessibilityService() {
+    class StubAccessibilityService : AccessibilityService() {
         override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
         override fun onInterrupt() = Unit
-        override fun onBind(intent: Intent?) = null
     }
 
     private val defaultSafeArea = FloatingEditorResolver.DisplaySafeArea(
