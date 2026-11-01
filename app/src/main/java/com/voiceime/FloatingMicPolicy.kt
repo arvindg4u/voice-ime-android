@@ -240,7 +240,7 @@ object FloatingMicPolicy {
         val max = minOf(final.length, interim.length)
         for (overlap in max downTo 1) {
             if (final.endsWith(interim.substring(0, overlap))) {
-                return final + interim.substring(0, overlap)
+                return final + interim.substring(overlap)
             }
         }
         return "$final $interim"

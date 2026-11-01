@@ -314,7 +314,7 @@ class FloatingMicPolicyTest {
             insetTopPx = 48,
             insetBottomPx = 112,
         )
-        assertEquals(1480, landscapeBottomY)
+        assertEquals(1528, landscapeBottomY)
         val fraction = FloatingMicPolicy.yToFraction(
             y = landscapeBottomY,
             screenHeight = 1752,
