@@ -28,7 +28,13 @@ jobs:
       - name: Run unit tests
         run: |
           chmod +x gradlew
-          ./gradlew testDebugUnitTest --stacktrace
+          if ! ./gradlew testDebugUnitTest --info > /tmp/gradle-test.log 2>&1; then
+            msg=$(grep -E "(^e: |FAILED|Exception:|AssertionError|Caused by:|What went wrong)" -A 3 /tmp/gradle-test.log | tail -n 60 | tr '\n' ' ' | cut -c1-3500)
+            echo "::error title=GradleFailure::${msg}"
+            cat /tmp/gradle-test.log
+            exit 1
+          fi
+          cat /tmp/gradle-test.log
 
       - name: Build debug APK
         run: |

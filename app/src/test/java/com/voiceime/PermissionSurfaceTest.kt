@@ -66,9 +66,9 @@ class PermissionSurfaceTest {
         val androidNs = "http://schemas.android.com/apk/res/android"
         var eventTypes = ""
         var flags = ""
-        var canPerformGestures: String? = null
-        var isAccessibilityTool: String? = null
-        var notificationTimeout: String? = null
+        var canPerformGestures = false
+        var isAccessibilityTool = false
+        var notificationTimeout = -1
 
         context.resources.getXml(R.xml.accessibility_service_config).use { parser ->
             while (parser.eventType != XmlPullParser.END_DOCUMENT) {
@@ -79,9 +79,12 @@ class PermissionSurfaceTest {
                         .orEmpty()
                     flags = parser.getAttributeValue(androidNs, "accessibilityFlags")
                         .orEmpty()
-                    canPerformGestures = parser.getAttributeValue(androidNs, "canPerformGestures")
-                    isAccessibilityTool = parser.getAttributeValue(androidNs, "isAccessibilityTool")
-                    notificationTimeout = parser.getAttributeValue(androidNs, "notificationTimeout")
+                    canPerformGestures =
+                        parser.getAttributeBooleanValue(androidNs, "canPerformGestures", false)
+                    isAccessibilityTool =
+                        parser.getAttributeBooleanValue(androidNs, "isAccessibilityTool", false)
+                    notificationTimeout =
+                        parser.getAttributeIntValue(androidNs, "notificationTimeout", -1)
                     break
                 }
                 parser.next()
@@ -124,8 +127,8 @@ class PermissionSurfaceTest {
             assertTrue(flags.contains("flagInputMethodEditor"))
         }
 
-        assertEquals("true", isAccessibilityTool)
-        assertEquals("0", notificationTimeout)
-        assertFalse(canPerformGestures == "true")
+        assertTrue(isAccessibilityTool)
+        assertEquals(0, notificationTimeout)
+        assertFalse(canPerformGestures)
     }
 }
