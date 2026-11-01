@@ -25,14 +25,36 @@ The optional floating button needs Android to report the focused editor and to
 host its accessibility overlay. The service is protected by
 `BIND_ACCESSIBILITY_SERVICE` and is enabled only by the user in system settings.
 
-The service uses focus, selection, and window-transition events to locate one
-focused, editable, non-password field. To preserve the cursor and selected range
-when inserting dictated text, it can inspect that field's current text and
-selection. It does not subscribe to text-change events, log the editor text, or
-send existing field contents to the configured transcription API. Password
-fields are rejected before a target is retained. Only the audio the user
-records is sent for transcription; transcript text is inserted at the cursor or
-copied as a fallback. Notification contents are never accessed.
+The service uses focus, click/long-click, selection, window-transition events,
+and Android 13+ `AccessibilityService.InputMethod` (`flagInputMethodEditor`)
+callbacks to locate the active non-password editor across apps, tablet
+split-screen/freeform windows, Samsung DeX displays, WebViews, Compose, and
+physical keyboards. It declares `android:isAccessibilityTool="true"` for
+Android 14–17 assistive-tool compliance. To preserve the cursor and selected
+range when inserting dictated text, it commits directly via
+`AccessibilityInputConnection.commitText` (Android 13+) or splices via
+`ACTION_SET_TEXT` / `ACTION_PASTE`. It does not subscribe to text-change or
+window-content-change events, log the editor text, or send existing field
+contents to the configured transcription API. Password fields (including
+visible-password and web-password variations) are rejected before a target is
+retained. Only the audio the user records is sent for transcription; transcript
+text is inserted at the cursor or copied as a fallback. Notification contents
+are never accessed.
+
+## Samsung One UI / Galaxy Tab background stability (Android 16/17)
+
+Samsung One UI Device Care ("Sleeping apps" / "Deep sleeping apps" / Optimized
+battery) can stop background `AccessibilityService` processes while Android
+Settings still shows the toggle enabled. For reliable floating-mic operation on
+Galaxy Tab and One UI:
+
+1. Open **Settings → Apps → Voice IME → Battery** and select **Unrestricted**.
+2. Ensure Voice IME is **not** listed under **Settings → Device care → Battery →
+   Background usage limits → Sleeping / Deep sleeping apps** (add to **Never
+   auto sleeping apps** if available).
+3. If Voice IME Settings reports that the service is enabled in Android Settings
+   but stopped in the background, toggle **Voice IME floating button** off and
+   back on once in **Settings → Accessibility → Installed apps**.
 
 ## “App was denied access” on Android 13+
 

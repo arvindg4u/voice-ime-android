@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.View
 import android.view.WindowManager
@@ -86,15 +87,16 @@ class SettingsActivity : AppCompatActivity() {
         findViewById<MaterialSwitch>(R.id.settingsClipboardToggle)?.isChecked =
             ClipboardHistoryActivity.isEnabled(this)
         findViewById<MaterialSwitch>(R.id.settingsSmartToggle)?.isChecked = settings.smartMode
-        findViewById<TextView>(R.id.settingsFloatingStatus)?.setText(
-            if (isFloatingServiceEnabled()) {
-                R.string.settings_floating_status_on
-            } else {
-                R.string.settings_floating_status_off
-            },
-        )
+        val floatingEnabled = isFloatingServiceEnabled()
+        val floatingStatusRes = when {
+            !floatingEnabled -> R.string.settings_floating_status_off
+            !FloatingMicAccessibilityService.isServiceConnected() -> R.string.settings_floating_status_stalled
+            !isIgnoringBatteryOptimizations() -> R.string.settings_floating_status_on_battery_warn
+            else -> R.string.settings_floating_status_on
+        }
+        findViewById<TextView>(R.id.settingsFloatingStatus)?.setText(floatingStatusRes)
         findViewById<MaterialButton>(R.id.settingsEnableFloating)?.setText(
-            if (isFloatingServiceEnabled()) {
+            if (floatingEnabled) {
                 R.string.settings_manage_floating
             } else {
                 R.string.settings_enable_floating
@@ -165,6 +167,20 @@ class SettingsActivity : AppCompatActivity() {
         }
         return enabled.split(':').any { flattened ->
             ComponentName.unflattenFromString(flattened.trim()) == expected
+        }
+    }
+
+    /**
+     * Read-only battery exemption check (no manifest permission needed).
+     * Samsung One UI Device Care ("Optimized" / "Sleeping apps") frequently
+     * stops AccessibilityService processes unless set to Unrestricted.
+     */
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        val pm = getSystemService(PowerManager::class.java) ?: return true
+        return try {
+            pm.isIgnoringBatteryOptimizations(packageName)
+        } catch (_: Throwable) {
+            true
         }
     }
 

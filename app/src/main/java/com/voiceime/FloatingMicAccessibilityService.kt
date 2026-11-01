@@ -2,24 +2,36 @@ package com.voiceime
 
 import android.Manifest
 import android.accessibilityservice.AccessibilityService
+import android.animation.ValueAnimator
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentCallbacks
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
+import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.provider.Settings
-import android.util.Log
+import android.text.TextUtils
+import android.util.TypedValue
+import android.view.Display
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.PopupMenu
 import android.widget.TextView
+import android.widget.Toast
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -29,786 +41,1252 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlin.math.abs
+import kotlin.math.hypot
 
 /**
- * System-wide host for the floating dictation button.
+ * Optional system-wide floating microphone hosted inside an AccessibilityService.
  *
- * This service is deliberately a thin invocation and insertion surface:
- * focused-editor discovery, overlay lifecycle, and cursor insertion live here;
- * recording stays in [AudioRecorder] and every transcription request stays in
- * the existing [LlmClient] backend. No second HTTP client, API key store, or
- * model implementation is introduced for the floating mode.
- *
- * Android requires an enabled AccessibilityService for a button that can appear
- * over another app and write to that app's focused editor. The service only
- * requests focused-editor events and never logs node text or content
- * descriptions. Password fields are rejected before a target is retained.
+ * Play-policy boundary:
+ * - Uses TYPE_ACCESSIBILITY_OVERLAY, never SYSTEM_ALERT_WINDOW.
+ * - Subscribes only to focus/click/long-click/selection/window transitions and
+ *   Android 13+ InputMethod start/finish callbacks; never text-changed or
+ *   window-content-changed streams, and never logs or persists existing editor text.
+ * - Shows only while a non-password, external-app text editor holds input focus
+ *   (or while an active dictation/transcription session needs its stop/cancel UI).
  */
 class FloatingMicAccessibilityService : AccessibilityService() {
 
     private enum class State { IDLE, RECORDING, TRANSCRIBING, ERROR }
 
-    companion object {
-        private const val TAG = "VoiceImeFloating"
-        private const val PREFS_NAME = "voice_ime_floating"
-        private const val PREF_X = "x"
-        private const val PREF_Y = "y"
-        // Keep a 48 dp touch target while drawing a smaller ~44 dp visual
-        // control, so the overlay is compact without becoming hard to tap.
-        private const val BUTTON_DP = 48
-        private const val MARGIN_DP = 8
-        private const val FEEDBACK_OFFSET_DP = 12
-        private const val FEEDBACK_DURATION_MS = 2_000L
-        private const val LIVE_PREVIEW_MAX_CHARS = 140
-        private const val LIVE_FINAL_TIMEOUT_MS = 12_000L
-        private const val RECORD_CAP_MS = AudioRecorder.MAX_DURATION_MS
-        private const val FOCUS_REFRESH_DELAY_MS = 90L
-        private const val FOCUS_REFRESH_RETRY_DELAY_MS = 140L
-        private const val FOCUS_REFRESH_MAX_RETRIES = 2
-
-        @Volatile
-        private var connectedInstance: FloatingMicAccessibilityService? = null
-
-        /** Called by [MicPermissionActivity] after its runtime permission dialog closes. */
-        fun onMicPermissionResult(granted: Boolean) {
-            connectedInstance?.onPermissionResult(granted)
-        }
-    }
-
     private val mainHandler = Handler(Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val discardScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val llm = LlmClient()
+
     private lateinit var settings: SettingsStore
+    private var clipboardStore: ClipboardStore? = null
+    private val llm = LlmClient()
 
-    private var state = State.IDLE
-    private var recorder: AudioRecorder? = null
-    private var liveSession: LlmClient.LiveSession? = null
-    /** Session handed to the Stop/commit coroutine; kept reachable for teardown. */
-    private var handedOffLiveSession: LlmClient.LiveSession? = null
-    private var workJob: Job? = null
-    private var capRunnable: Runnable? = null
-    private var pendingPermissionTap = false
-    private var keyCursor = 0
-
-    private val liveGuard = LiveSessionGuard()
-    private val liveFinalParts = StringBuilder()
-    private var liveLastInterim = ""
-    private var liveSessionId = 0L
-
-    private var targetNode: AccessibilityNodeInfo? = null
-    private var focusRefreshRetries = 0
+    private var overlayContext: Context? = null
+    private var overlayDisplayId: Int = Display.DEFAULT_DISPLAY
+    private var windowManager: WindowManager? = null
+    private var safeArea = FloatingEditorResolver.DisplaySafeArea(widthPx = 1080, heightPx = 1920)
 
     private var button: FloatingMicView? = null
-    private var feedback: TextView? = null
-    private var buttonParams: WindowManager.LayoutParams? = null
-    private var feedbackParams: WindowManager.LayoutParams? = null
-    private var peekAnimator: android.animation.ValueAnimator? = null
-    private var isPeeked = false
-    private var prePeekX: Int? = null
-    private var idlePeekRunnable: Runnable? = null
-    private var peekRestoreRunnable: Runnable? = null
-    private var feedbackHideRunnable: Runnable? = null
+    private var layoutParams: WindowManager.LayoutParams? = null
+    private var previewView: TextView? = null
+    private var previewLayoutParams: WindowManager.LayoutParams? = null
+    private var attached = false
+    private var previewAttached = false
+    private var peeked = false
+    private var peekAnimator: ValueAnimator? = null
 
-    private val dp: Float
-        get() = resources.displayMetrics.density
+    private var dockRight = true
+    private var yFraction = 0.5f
 
-    private val screenWidth: Int
-        get() = resources.displayMetrics.widthPixels
+    private var state = State.IDLE
+    private var targetNode: AccessibilityNodeInfo? = null
+    private var hasActiveImeTarget = false
+    private var imeSessionSnapshot = FloatingEditorResolver.ImeSessionSnapshot()
+    private var discoveryStepIndex = 0
 
-    private val screenHeight: Int
-        get() = resources.displayMetrics.heightPixels
+    private var recorder: AudioRecorder? = null
+    private var transcribeJob: Job? = null
+    private var liveCommitJob: Job? = null
+    private var liveStreamingSession: LiveSession? = null
+    private val liveFinalParts = StringBuilder()
+    private var liveLastInterim: String = ""
+    private var keyCursor = 0
 
-    override fun onCreate() {
-        super.onCreate()
-        connectedInstance = this
-        settings = SettingsStore(this)
+    private val peekRunnable = Runnable { animatePeek(true) }
+    private val peekRestoreRunnable = Runnable { animatePeek(false) }
+    private val clearErrorRunnable = Runnable {
+        if (state == State.ERROR) {
+            setState(State.IDLE)
+            refreshFocus(eventSource = null, eventConfirmsSelection = false)
+        }
+    }
+    private val livePreviewRunnable = Runnable { renderLivePreviewOnMain() }
+
+    private val discoveryStepRunnable = object : Runnable {
+        override fun run() {
+            val offsets = FloatingMicPolicy.FOCUS_DISCOVERY_OFFSETS_MS
+            if (discoveryStepIndex >= offsets.size) return
+            val step = discoveryStepIndex
+            discoveryStepIndex++
+            refreshFocus(eventSource = null, eventConfirmsSelection = false)
+            // Keep stepping if not yet attached, or once more at <=220ms to settle
+            // multi-window / soft-keyboard insets; stop early once a concrete node is bound.
+            val settled = attached && targetNode != null && offsets[step] >= 220L
+            if (!settled && discoveryStepIndex < offsets.size) {
+                val prevOffset = offsets[step]
+                val nextDelay = (offsets[discoveryStepIndex] - prevOffset).coerceAtLeast(40L)
+                mainHandler.postDelayed(this, nextDelay)
+            }
+        }
+    }
+
+    private val overlayComponentCallbacks = object : ComponentCallbacks {
+        override fun onConfigurationChanged(newConfig: Configuration) {
+            mainHandler.post { onDisplayGeometryChanged() }
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onLowMemory() = Unit
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        connectedInstance = this
-        // Accessibility may have been enabled while an editor was already open.
-        mainHandler.post { refreshFocusedEditor() }
+        connectedInstance = true
+        settings = SettingsStore(this)
+        FloatingEditorResolver.reinforceServiceFlags(this)
+        bindOverlayDisplay(Display.DEFAULT_DISPLAY)
+        loadSavedDockPreferences()
+        refreshFocus(eventSource = null, eventConfirmsSelection = false)
+        startDiscoveryWave()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    override fun onCreateInputMethod(): android.accessibilityservice.InputMethod =
+        FloatingEditorResolver.Api33Helper.createInputMethod(
+            service = this,
+            listener = object : FloatingEditorResolver.Api33Helper.Listener {
+                override fun onImeSessionChanged(snapshot: FloatingEditorResolver.ImeSessionSnapshot) {
+                    mainHandler.post {
+                        imeSessionSnapshot = snapshot
+                        refreshFocus(eventSource = null, eventConfirmsSelection = false)
+                        if (snapshot.inputStarted) {
+                            startDiscoveryWave()
+                        }
+                    }
+                }
+
+                override fun onImeSelectionChanged() {
+                    mainHandler.post {
+                        refreshFocus(eventSource = null, eventConfirmsSelection = false)
+                    }
+                }
+            },
+        )
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        mainHandler.post { onDisplayGeometryChanged() }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        when (event.eventType) {
-            AccessibilityEvent.TYPE_VIEW_CLICKED,
-            AccessibilityEvent.TYPE_VIEW_FOCUSED,
-            AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED,
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
-                // Resolve the current INPUT focus instead of trusting an
-                // event's source node. Samsung's keyboard/handwriting windows
-                // can become active during S Pen input while the editor keeps
-                // input focus in another interactive window.
-                scheduleFocusRefresh()
+        val type = event.eventType
+        val inspectSource = type == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
+            type == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+            type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED ||
+            type == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+
+        val source = if (inspectSource) {
+            try {
+                event.source
+            } catch (_: Throwable) {
+                null
             }
+        } else {
+            null
+        }
+        try {
+            refreshFocus(
+                eventSource = source,
+                eventConfirmsSelection = type == AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED,
+            )
+        } finally {
+            FloatingEditorResolver.recycleQuietly(source)
+        }
+
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED ||
+            type == AccessibilityEvent.TYPE_WINDOWS_CHANGED ||
+            type == AccessibilityEvent.TYPE_VIEW_FOCUSED ||
+            type == AccessibilityEvent.TYPE_VIEW_CLICKED ||
+            type == AccessibilityEvent.TYPE_VIEW_LONG_CLICKED
+        ) {
+            startDiscoveryWave()
         }
     }
 
     override fun onInterrupt() {
-        // The accessibility framework is taking the service offline. Do not
-        // leave a live mic or a window behind while it does so.
-        cancelCurrentWork()
+        cancelWork()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
-        if (connectedInstance === this) connectedInstance = null
-        teardown()
+        connectedInstance = false
+        teardownServiceState()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
-        teardown()
-        connectedInstance = null
+        connectedInstance = false
+        teardownServiceState()
         serviceScope.cancel()
-        discardScope.cancel()
-        mainHandler.removeCallbacksAndMessages(null)
+        llm.shutdown()
         super.onDestroy()
     }
 
-    private fun scheduleFocusRefresh() {
-        focusRefreshRetries = 0
-        mainHandler.removeCallbacks(refreshFocusRunnable)
-        mainHandler.postDelayed(refreshFocusRunnable, FOCUS_REFRESH_DELAY_MS)
+    private fun teardownServiceState() {
+        mainHandler.removeCallbacks(discoveryStepRunnable)
+        mainHandler.removeCallbacks(peekRunnable)
+        mainHandler.removeCallbacks(peekRestoreRunnable)
+        mainHandler.removeCallbacks(clearErrorRunnable)
+        mainHandler.removeCallbacks(livePreviewRunnable)
+        cancelWork()
+        hideOverlay()
+        unbindOverlayDisplayCallbacks()
+        replaceTargetNode(null)
+        hasActiveImeTarget = false
     }
 
-    private val refreshFocusRunnable = Runnable { refreshFocusedEditor() }
+    private fun startDiscoveryWave() {
+        val offsets = FloatingMicPolicy.FOCUS_DISCOVERY_OFFSETS_MS
+        if (offsets.isEmpty()) return
+        mainHandler.removeCallbacks(discoveryStepRunnable)
+        discoveryStepIndex = 0
+        mainHandler.postDelayed(discoveryStepRunnable, offsets[0])
+    }
+
+    private fun currentImeSnapshot(): FloatingEditorResolver.ImeSessionSnapshot {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            imeSessionSnapshot = FloatingEditorResolver.Api33Helper.currentSnapshot(
+                service = this,
+                cached = imeSessionSnapshot,
+            )
+        }
+        return imeSessionSnapshot
+    }
+
+    private fun refreshFocus(
+        eventSource: AccessibilityNodeInfo?,
+        eventConfirmsSelection: Boolean,
+    ) {
+        if (!::settings.isInitialized) return
+        safeArea = FloatingEditorResolver.readDisplaySafeArea(
+            windowManager = windowManager,
+            fallbackContext = overlayContext ?: this,
+        )
+        val resolution = FloatingEditorResolver.resolve(
+            service = this,
+            eventSource = eventSource,
+            eventConfirmsSelection = eventConfirmsSelection,
+            imeSnapshot = currentImeSnapshot(),
+            ownPackageName = packageName,
+            fallbackSafeArea = safeArea,
+        )
+        if (resolution.shouldShow) {
+            replaceTargetNode(resolution.targetNode)
+            hasActiveImeTarget = resolution.backedByImeSession
+            ensureOverlayOnDisplay(resolution.displayId)
+            showOverlay()
+        } else {
+            replaceTargetNode(null)
+            hasActiveImeTarget = false
+            if (!FloatingMicPolicy.shouldKeepVisibleWhileBusy(isBusy())) {
+                hideOverlay()
+            }
+        }
+    }
 
     /**
-     * Resolves INPUT focus across interactive windows. The Samsung keyboard or
-     * handwriting surface can be the active window while the editor remains
-     * focused in the app window, so rootInActiveWindow alone is insufficient.
+     * Re-evaluates focus right before recording starts or right before text
+     * insertion. Returns true when either a valid [targetNode] or an eligible
+     * Android 13+ `InputMethod` session is ready to receive dictated text.
      */
-    private fun refreshFocusedEditor() {
-        val candidate = findInputFocusedNode()
-        if (candidate != null) {
-            if (isEligibleEditor(candidate, inputFocusConfirmed = true)) {
-                applyCandidate(candidate)
-                return
-            }
-            recycleNode(candidate)
-        }
+    private fun refreshEditorTarget(): Boolean {
+        val resolution = FloatingEditorResolver.resolve(
+            service = this,
+            eventSource = null,
+            eventConfirmsSelection = false,
+            imeSnapshot = currentImeSnapshot(),
+            ownPackageName = packageName,
+            fallbackSafeArea = safeArea,
+        )
+        replaceTargetNode(resolution.targetNode)
+        hasActiveImeTarget = resolution.shouldShow && resolution.backedByImeSession
+        return resolution.shouldShow && (targetNode != null || hasActiveImeTarget)
+    }
 
-        // Keep the current editor through short Samsung IME/window hand-offs
-        // when its node still reports input focus. Retry only a bounded number
-        // of times; a real focus loss must hide the button promptly.
-        if (targetNodeIsStillFocused()) {
-            focusRefreshRetries = 0
+    private fun replaceTargetNode(next: AccessibilityNodeInfo?) {
+        val old = targetNode
+        targetNode = next
+        if (old != null && old !== next) {
+            FloatingEditorResolver.recycleQuietly(old)
+        }
+    }
+
+    private fun bindOverlayDisplay(displayId: Int) {
+        unbindOverlayDisplayCallbacks()
+        val ctx = FloatingEditorResolver.createOverlayContext(this, displayId)
+        overlayContext = ctx
+        overlayDisplayId = displayId
+        windowManager = ctx.getSystemService(WINDOW_SERVICE) as? WindowManager
+            ?: getSystemService(WINDOW_SERVICE) as? WindowManager
+        if (ctx !== this) {
+            try {
+                ctx.registerComponentCallbacks(overlayComponentCallbacks)
+            } catch (_: Throwable) {
+                // Non-fatal if OEM context rejects callback registration.
+            }
+        }
+        safeArea = FloatingEditorResolver.readDisplaySafeArea(windowManager, ctx)
+    }
+
+    private fun unbindOverlayDisplayCallbacks() {
+        val ctx = overlayContext
+        if (ctx != null && ctx !== this) {
+            try {
+                ctx.unregisterComponentCallbacks(overlayComponentCallbacks)
+            } catch (_: Throwable) {
+                // Ignore if already unregistered.
+            }
+        }
+    }
+
+    private fun ensureOverlayOnDisplay(targetDisplayId: Int) {
+        if (overlayContext == null) {
+            bindOverlayDisplay(targetDisplayId)
             return
         }
-        if (focusRefreshRetries < FOCUS_REFRESH_MAX_RETRIES) {
-            focusRefreshRetries += 1
-            mainHandler.removeCallbacks(refreshFocusRunnable)
-            mainHandler.postDelayed(
-                refreshFocusRunnable,
-                FOCUS_REFRESH_RETRY_DELAY_MS * focusRefreshRetries,
-            )
-        } else {
-            focusRefreshRetries = 0
-            clearTarget()
+        if (overlayDisplayId == targetDisplayId) return
+        if (isBusy()) return
+        if (attached) {
+            hideOverlay()
         }
+        // Rebuild view instances against the new display's density/theme metrics.
+        button = null
+        layoutParams = null
+        previewView = null
+        previewLayoutParams = null
+        bindOverlayDisplay(targetDisplayId)
     }
 
-    /** Uses the service-wide focus query first, then the active-window fallback. */
-    private fun findInputFocusedNode(): AccessibilityNodeInfo? {
-        val acrossWindows = try {
-            findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        } catch (_: Exception) {
-            null
-        }
-        if (acrossWindows != null) return acrossWindows
-
-        val root = try {
-            rootInActiveWindow
-        } catch (_: Exception) {
-            null
-        } ?: return null
-        var focused: AccessibilityNodeInfo? = null
-        return try {
-            focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            focused?.let { AccessibilityNodeInfo.obtain(it) }
-        } catch (_: Exception) {
-            null
-        } finally {
-            if (focused !== root) recycleNode(focused)
-            recycleNode(root)
-        }
-    }
-
-    private fun targetNodeIsStillFocused(): Boolean {
-        val current = targetNode?.let { node ->
-            try {
-                AccessibilityNodeInfo.obtain(node)
-            } catch (_: Exception) {
-                null
-            }
-        } ?: return false
-        return try {
-            current.refresh() && isEligibleEditor(current, inputFocusConfirmed = false)
-        } catch (_: Exception) {
-            false
-        } finally {
-            recycleNode(current)
-        }
-    }
-
-    private fun isEligibleEditor(
-        candidate: AccessibilityNodeInfo,
-        inputFocusConfirmed: Boolean,
-    ): Boolean = try {
-        val candidatePackage = candidate.packageName?.toString()
-        FloatingMicPolicy.shouldShowForEditor(
-            isEditable = candidate.isEditable,
-            isFocused = candidate.isFocused,
-            isPassword = candidate.isPassword,
-            packageName = candidatePackage,
-            ownPackageName = packageName(),
-            inputFocusConfirmed = inputFocusConfirmed,
+    private fun onDisplayGeometryChanged() {
+        val wm = windowManager ?: return
+        safeArea = FloatingEditorResolver.readDisplaySafeArea(wm, overlayContext ?: this)
+        val lp = layoutParams ?: return
+        val size = buttonSizePx()
+        val margin = dp(EDGE_MARGIN_DP)
+        lp.width = size
+        lp.height = size
+        peekAnimator?.cancel()
+        peeked = false
+        button?.peekProgress = 0f
+        lp.x = FloatingMicPolicy.dockedXInSafeArea(
+            dockRight = dockRight,
+            screenWidth = safeArea.widthPx,
+            windowSize = size,
+            marginPx = margin,
+            insetLeftPx = safeArea.insetLeftPx,
+            insetRightPx = safeArea.insetRightPx,
         )
-    } catch (_: Exception) {
-        false
-    }
-
-    /** Takes ownership of a node confirmed to be an eligible focused editor. */
-    private fun applyCandidate(candidate: AccessibilityNodeInfo) {
-        focusRefreshRetries = 0
-        mainHandler.removeCallbacks(refreshFocusRunnable)
-        replaceTarget(candidate)
-        showOverlayIfNeeded()
-        if (isPeeked) restoreFromPeek()
-        armIdlePeekTimer()
-    }
-
-    private fun recycleNode(node: AccessibilityNodeInfo?) {
-        try {
-            node?.recycle()
-        } catch (_: Exception) {
+        lp.y = FloatingMicPolicy.yFromFraction(
+            fraction = yFraction,
+            screenHeight = safeArea.heightPx,
+            windowSize = size,
+            marginPx = margin,
+            insetTopPx = safeArea.insetTopPx,
+            insetBottomPx = safeArea.insetBottomPx,
+        )
+        if (attached) {
+            updateOverlayLayout()
+            updatePreviewPosition()
+            schedulePeek()
         }
     }
 
-    private fun packageName(): String = applicationContext.packageName
-
-    private fun replaceTarget(next: AccessibilityNodeInfo) {
-        try {
-            targetNode?.recycle()
-        } catch (_: Exception) {
+    private fun loadSavedDockPreferences() {
+        val prefs = getSharedPreferences(PREFS_OVERLAY, Context.MODE_PRIVATE)
+        val size = buttonSizePx()
+        val margin = dp(EDGE_MARGIN_DP)
+        if (prefs.contains(PREF_DOCK_RIGHT) && prefs.contains(PREF_Y_FRACTION)) {
+            dockRight = prefs.getBoolean(PREF_DOCK_RIGHT, true)
+            yFraction = prefs.getFloat(PREF_Y_FRACTION, 0.5f).coerceIn(0f, 1f)
+            return
         }
-        targetNode = next
+        // Migrate legacy v1.6.x pixel coordinates smoothly on first upgrade.
+        if (prefs.contains(PREF_X) || prefs.contains(PREF_Y)) {
+            val defaultX = safeArea.widthPx - size - margin
+            val defaultY = (safeArea.heightPx - size) / 2
+            val legacyX = prefs.getInt(PREF_X, defaultX)
+            val legacyY = prefs.getInt(PREF_Y, defaultY)
+            dockRight = FloatingMicPolicy.isRightDocked(legacyX, safeArea.widthPx, size)
+            yFraction = FloatingMicPolicy.yToFraction(
+                y = legacyY,
+                screenHeight = safeArea.heightPx,
+                windowSize = size,
+                marginPx = margin,
+                insetTopPx = safeArea.insetTopPx,
+                insetBottomPx = safeArea.insetBottomPx,
+            )
+            savePositionPreferences()
+        } else {
+            dockRight = true
+            yFraction = 0.5f
+        }
     }
 
-    private fun clearTarget() {
-        focusRefreshRetries = 0
-        mainHandler.removeCallbacks(refreshFocusRunnable)
-        // A focus change while recording must not leave a stale live
-        // hypothesis bubble attached to the old editor.
-        if (state == State.RECORDING || state == State.TRANSCRIBING) hideFeedback()
-        try {
-            targetNode?.recycle()
-        } catch (_: Exception) {
-        }
-        targetNode = null
-        val busy = state == State.RECORDING || state == State.TRANSCRIBING
-        if (!FloatingMicPolicy.shouldKeepVisibleWhileBusy(busy)) removeOverlay()
+    private fun savePositionPreferences() {
+        getSharedPreferences(PREFS_OVERLAY, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(PREF_DOCK_RIGHT, dockRight)
+            .putFloat(PREF_Y_FRACTION, yFraction)
+            .apply()
     }
 
-    private fun showOverlayIfNeeded() {
-        if (button != null || targetNode == null) return
-        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        val size = dp(BUTTON_DP)
-        val margin = dp(MARGIN_DP)
-        val params = WindowManager.LayoutParams(
+    private fun showOverlay() {
+        val wm = windowManager ?: return
+        safeArea = FloatingEditorResolver.readDisplaySafeArea(wm, overlayContext ?: this)
+        if (button == null) {
+            button = createButton()
+            layoutParams = createLayoutParams()
+        }
+        if (!attached) {
+            val lp = layoutParams ?: return
+            val size = buttonSizePx()
+            val margin = dp(EDGE_MARGIN_DP)
+            lp.width = size
+            lp.height = size
+            lp.x = FloatingMicPolicy.dockedXInSafeArea(
+                dockRight = dockRight,
+                screenWidth = safeArea.widthPx,
+                windowSize = size,
+                marginPx = margin,
+                insetLeftPx = safeArea.insetLeftPx,
+                insetRightPx = safeArea.insetRightPx,
+            )
+            lp.y = FloatingMicPolicy.yFromFraction(
+                fraction = yFraction,
+                screenHeight = safeArea.heightPx,
+                windowSize = size,
+                marginPx = margin,
+                insetTopPx = safeArea.insetTopPx,
+                insetBottomPx = safeArea.insetBottomPx,
+            )
+            try {
+                wm.addView(button, lp)
+                attached = true
+                peeked = false
+                button?.peekProgress = 0f
+                button?.visibility = View.VISIBLE
+                schedulePeek()
+            } catch (_: Exception) {
+                attached = false
+            }
+        } else {
+            button?.visibility = View.VISIBLE
+            if (peeked && isBusy()) {
+                animatePeek(false)
+            } else if (!peeked) {
+                schedulePeek()
+            }
+        }
+    }
+
+    private fun hideOverlay() {
+        mainHandler.removeCallbacks(peekRunnable)
+        mainHandler.removeCallbacks(peekRestoreRunnable)
+        peekAnimator?.cancel()
+        hideLivePreview()
+        val wm = windowManager
+        val view = button
+        if (attached && wm != null && view != null) {
+            try {
+                wm.removeView(view)
+            } catch (_: Exception) {
+                // Window already torn down by framework.
+            }
+        }
+        attached = false
+        peeked = false
+    }
+
+    private fun createButton(): FloatingMicView {
+        val viewContext = overlayContext ?: this
+        val view = FloatingMicView(viewContext).apply {
+            contentDescription = getString(R.string.ime_mic_description)
+            isFocusable = false
+        }
+        attachTouchHandler(view)
+        return view
+    }
+
+    private fun createLayoutParams(): WindowManager.LayoutParams {
+        val size = buttonSizePx()
+        val margin = dp(EDGE_MARGIN_DP)
+        val x = FloatingMicPolicy.dockedXInSafeArea(
+            dockRight = dockRight,
+            screenWidth = safeArea.widthPx,
+            windowSize = size,
+            marginPx = margin,
+            insetLeftPx = safeArea.insetLeftPx,
+            insetRightPx = safeArea.insetRightPx,
+        )
+        val y = FloatingMicPolicy.yFromFraction(
+            fraction = yFraction,
+            screenHeight = safeArea.heightPx,
+            windowSize = size,
+            marginPx = margin,
+            insetTopPx = safeArea.insetTopPx,
+            insetBottomPx = safeArea.insetBottomPx,
+        )
+        return WindowManager.LayoutParams(
             size,
             size,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-            val savedX = prefs.getInt(PREF_X, Int.MIN_VALUE)
-            val savedY = prefs.getInt(PREF_Y, Int.MIN_VALUE)
-            x = if (savedX == Int.MIN_VALUE) screenWidth - size - margin else
-                FloatingMicPolicy.dockedX(savedX, screenWidth, size, margin)
-            y = if (savedY == Int.MIN_VALUE) screenHeight / 2 - size / 2 else
-                FloatingMicPolicy.clampY(savedY, screenHeight, size, margin)
+            this.x = x
+            this.y = y
+            title = "VoiceImeFloatingMic"
         }
-        val mic = FloatingMicView(this).apply {
-            setState(state.toViewState())
-            setOnTouchListener { view, motionEvent -> handleButtonTouch(view, motionEvent) }
-        }
-        val bubble = TextView(this).apply {
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 13f
-            setPadding(dp(12), dp(8), dp(12), dp(8))
-            background = GradientDrawable().apply {
-                cornerRadius = dp(16).toFloat()
-                setColor(0xEE1C1C1E.toInt())
+    }
+
+    private fun attachTouchHandler(view: FloatingMicView) {
+        var downRawX = 0f
+        var downRawY = 0f
+        var startX = 0
+        var startY = 0
+        var dragging = false
+        var longPressed = false
+        val longPressRunnable = Runnable {
+            if (!dragging) {
+                longPressed = true
+                hapticTap(view)
+                onLongPress(view)
             }
-            alpha = 0f
-            visibility = View.VISIBLE
-            isClickable = false
-            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
         }
-        val bubbleWindow = WindowManager.LayoutParams(
+
+        view.setOnTouchListener { _, event ->
+            val lp = layoutParams ?: return@setOnTouchListener false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    mainHandler.removeCallbacks(peekRunnable)
+                    mainHandler.removeCallbacks(peekRestoreRunnable)
+                    if (peeked) animatePeek(false)
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    startX = lp.x
+                    startY = lp.y
+                    dragging = false
+                    longPressed = false
+                    mainHandler.postDelayed(longPressRunnable, FloatingMicPolicy.LONG_PRESS_MS)
+                    true
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downRawX
+                    val dy = event.rawY - downRawY
+                    if (!dragging && hypot(dx, dy) > dp(FloatingMicPolicy.TAP_THRESHOLD_DP)) {
+                        dragging = true
+                        mainHandler.removeCallbacks(longPressRunnable)
+                    }
+                    if (dragging) {
+                        val size = buttonSizePx()
+                        val margin = dp(EDGE_MARGIN_DP)
+                        val minX = margin + safeArea.insetLeftPx
+                        val maxX = (safeArea.widthPx - size - margin - safeArea.insetRightPx)
+                            .coerceAtLeast(minX)
+                        lp.x = (startX + dx.toInt()).coerceIn(minX, maxX)
+                        lp.y = FloatingMicPolicy.clampYInSafeArea(
+                            y = startY + dy.toInt(),
+                            screenHeight = safeArea.heightPx,
+                            windowSize = size,
+                            marginPx = margin,
+                            insetTopPx = safeArea.insetTopPx,
+                            insetBottomPx = safeArea.insetBottomPx,
+                        )
+                        updateOverlayLayout()
+                        updatePreviewPosition()
+                    }
+                    true
+                }
+
+                MotionEvent.ACTION_UP -> {
+                    mainHandler.removeCallbacks(longPressRunnable)
+                    if (dragging) {
+                        snapToNearestEdge()
+                        schedulePeek()
+                    } else if (!longPressed) {
+                        hapticTap(view)
+                        onMicTapped()
+                    }
+                    true
+                }
+
+                MotionEvent.ACTION_CANCEL -> {
+                    mainHandler.removeCallbacks(longPressRunnable)
+                    if (dragging) snapToNearestEdge()
+                    schedulePeek()
+                    true
+                }
+
+                else -> false
+            }
+        }
+    }
+
+    private fun snapToNearestEdge() {
+        val lp = layoutParams ?: return
+        val size = buttonSizePx()
+        val margin = dp(EDGE_MARGIN_DP)
+        dockRight = FloatingMicPolicy.isRightDocked(lp.x, safeArea.widthPx, size)
+        val targetX = FloatingMicPolicy.dockedXInSafeArea(
+            dockRight = dockRight,
+            screenWidth = safeArea.widthPx,
+            windowSize = size,
+            marginPx = margin,
+            insetLeftPx = safeArea.insetLeftPx,
+            insetRightPx = safeArea.insetRightPx,
+        )
+        lp.y = FloatingMicPolicy.clampYInSafeArea(
+            y = lp.y,
+            screenHeight = safeArea.heightPx,
+            windowSize = size,
+            marginPx = margin,
+            insetTopPx = safeArea.insetTopPx,
+            insetBottomPx = safeArea.insetBottomPx,
+        )
+        yFraction = FloatingMicPolicy.yToFraction(
+            y = lp.y,
+            screenHeight = safeArea.heightPx,
+            windowSize = size,
+            marginPx = margin,
+            insetTopPx = safeArea.insetTopPx,
+            insetBottomPx = safeArea.insetBottomPx,
+        )
+        animateX(lp.x, targetX, 0f) {
+            savePositionPreferences()
+        }
+    }
+
+    private fun schedulePeek() {
+        mainHandler.removeCallbacks(peekRunnable)
+        mainHandler.removeCallbacks(peekRestoreRunnable)
+        if (!attached || isBusy() || state == State.ERROR) return
+        mainHandler.postDelayed(peekRunnable, FloatingMicPolicy.PEEK_DELAY_MS)
+    }
+
+    private fun animatePeek(toPeek: Boolean) {
+        val lp = layoutParams ?: return
+        if (!attached || peeked == toPeek) return
+        if (toPeek && isBusy()) return
+        val size = buttonSizePx()
+        val margin = dp(EDGE_MARGIN_DP)
+        val docked = FloatingMicPolicy.dockedXInSafeArea(
+            dockRight = dockRight,
+            screenWidth = safeArea.widthPx,
+            windowSize = size,
+            marginPx = margin,
+            insetLeftPx = safeArea.insetLeftPx,
+            insetRightPx = safeArea.insetRightPx,
+        )
+        val edgeInset = if (dockRight) safeArea.insetRightPx else safeArea.insetLeftPx
+        val targetX = if (toPeek) {
+            FloatingMicPolicy.peekedX(
+                x = docked,
+                screenWidth = safeArea.widthPx,
+                windowSize = size,
+                visiblePx = dp(FloatingMicPolicy.PEEK_VISIBLE_DP),
+                insetPx = edgeInset,
+            )
+        } else {
+            docked
+        }
+        peeked = toPeek
+        animateX(lp.x, targetX, if (toPeek) 1f else 0f) {
+            if (toPeek && attached && !isBusy() && state != State.ERROR) {
+                mainHandler.removeCallbacks(peekRestoreRunnable)
+                mainHandler.postDelayed(peekRestoreRunnable, FloatingMicPolicy.PEEK_RESTORE_DELAY_MS)
+            }
+        }
+    }
+
+    private fun animateX(fromX: Int, toX: Int, targetPeek: Float, onEnd: (() -> Unit)? = null) {
+        val lp = layoutParams ?: return
+        val startPeek = button?.peekProgress ?: 0f
+        peekAnimator?.cancel()
+        peekAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = FloatingMicPolicy.PEEK_ANIMATION_MS
+            addUpdateListener { anim ->
+                val t = anim.animatedValue as Float
+                lp.x = (fromX + (toX - fromX) * t).toInt()
+                button?.peekProgress = startPeek + (targetPeek - startPeek) * t
+                updateOverlayLayout()
+                updatePreviewPosition()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    onEnd?.invoke()
+                }
+            })
+            start()
+        }
+    }
+
+    private fun updateOverlayLayout() {
+        val wm = windowManager ?: return
+        val view = button ?: return
+        val lp = layoutParams ?: return
+        if (!attached) return
+        try {
+            wm.updateViewLayout(view, lp)
+        } catch (_: Exception) {
+            attached = false
+        }
+    }
+
+    private fun ensurePreviewView(): TextView {
+        previewView?.let { return it }
+        val viewContext = overlayContext ?: this
+        val bg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(PREVIEW_CORNER_DP).toFloat()
+            setColor(Color.parseColor("#EE161622"))
+            setStroke(dp(1), Color.parseColor("#33FFFFFF"))
+        }
+        return TextView(viewContext).apply {
+            background = bg
+            setTextColor(Color.parseColor("#F5F7FA"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            maxLines = 2
+            maxWidth = dp(PREVIEW_MAX_WIDTH_DP)
+            ellipsize = TextUtils.TruncateAt.START
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            isFocusable = false
+            isClickable = false
+        }.also { previewView = it }
+    }
+
+    private fun createPreviewLayoutParams(): WindowManager.LayoutParams =
+        WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = params.x
-            y = params.y
+            title = "VoiceImeFloatingPreview"
         }
 
+    private fun applyPreviewPosition(lp: WindowManager.LayoutParams) {
+        val micLp = layoutParams ?: return
+        val size = buttonSizePx()
+        val gap = dp(PREVIEW_GAP_DP)
+        val margin = dp(EDGE_MARGIN_DP)
+        lp.y = FloatingMicPolicy.clampYInSafeArea(
+            y = micLp.y + dp(4),
+            screenHeight = safeArea.heightPx,
+            windowSize = size,
+            marginPx = margin,
+            insetTopPx = safeArea.insetTopPx,
+            insetBottomPx = safeArea.insetBottomPx,
+        )
+        if (FloatingMicPolicy.isRightDocked(micLp.x, safeArea.widthPx, size)) {
+            lp.gravity = Gravity.TOP or Gravity.END
+            lp.x = (safeArea.widthPx - micLp.x + gap).coerceAtLeast(margin + safeArea.insetRightPx)
+        } else {
+            lp.gravity = Gravity.TOP or Gravity.START
+            lp.x = (micLp.x + size + gap).coerceAtLeast(margin + safeArea.insetLeftPx)
+        }
+    }
+
+    private fun updatePreviewPosition() {
+        if (!previewAttached) return
+        val wm = windowManager ?: return
+        val view = previewView ?: return
+        val lp = previewLayoutParams ?: return
+        applyPreviewPosition(lp)
         try {
-            wm.addView(mic, params)
-            button = mic
-            buttonParams = params
-            wm.addView(bubble, bubbleWindow)
-            feedback = bubble
-            feedbackParams = bubbleWindow
-        } catch (t: Throwable) {
-            Log.w(TAG, "Floating overlay could not attach", t)
-            safeRemove(wm, bubble)
-            safeRemove(wm, mic)
-            button = null
-            feedback = null
-            buttonParams = null
-            feedbackParams = null
+            wm.updateViewLayout(view, lp)
+        } catch (_: Exception) {
+            previewAttached = false
+        }
+    }
+
+    private fun postLivePreviewUpdate() {
+        mainHandler.removeCallbacks(livePreviewRunnable)
+        mainHandler.post(livePreviewRunnable)
+    }
+
+    private fun renderLivePreviewOnMain() {
+        if (state != State.RECORDING && state != State.TRANSCRIBING) {
+            hideLivePreview()
             return
         }
-        armIdlePeekTimer()
-    }
-
-    private fun handleButtonTouch(view: View, event: MotionEvent): Boolean {
-        val params = buttonParams ?: return true
-        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        // A listener-local gesture state cannot survive separate listener
-        // invocations, so ACTION_DOWN initializes fields on the view tag.
-        val gesture = view.getTag(R.id.floating_gesture_state) as? GestureState
-            ?: GestureState().also { view.setTag(R.id.floating_gesture_state, it) }
-        val longPress = Runnable {
-            if (state == State.TRANSCRIBING) {
-                gesture.longPressFired = true
-                cancelCurrentWork()
-            }
+        val merged = FloatingMicPolicy.mergeLivePreview(liveFinalParts.toString(), liveLastInterim)
+        val display = FloatingMicPolicy.livePreviewTail(merged, PREVIEW_TAIL_CHARS)
+        if (display.isBlank() || !attached) {
+            hideLivePreview()
+            return
         }
-
-        return when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                cancelIdlePeekTimer()
-                gesture.downX = event.rawX
-                gesture.downY = event.rawY
-                gesture.startX = params.x
-                gesture.startY = params.y
-                gesture.consumedPeekRestore = false
-                gesture.longPressFired = false
-                if (isPeeked) {
-                    restoreFromPeek()
-                    // Ramblr-style two-tap restore: restoring a peeking
-                    // control must not unexpectedly start the microphone.
-                    gesture.consumedPeekRestore = true
-                } else if (state == State.TRANSCRIBING) {
-                    mainHandler.postDelayed(longPress, FloatingMicPolicy.LONG_PRESS_MS)
-                    gesture.longPressRunnable = longPress
-                }
-                true
+        val wm = windowManager ?: return
+        val view = ensurePreviewView()
+        view.text = display
+        val lp = previewLayoutParams ?: createPreviewLayoutParams().also { previewLayoutParams = it }
+        applyPreviewPosition(lp)
+        if (!previewAttached) {
+            try {
+                wm.addView(view, lp)
+                previewAttached = true
+            } catch (_: Exception) {
+                previewAttached = false
             }
-
-            MotionEvent.ACTION_MOVE -> {
-                val moved = abs(event.rawX - gesture.downX) + abs(event.rawY - gesture.downY)
-                if (moved >= dp(FloatingMicPolicy.TAP_THRESHOLD_DP)) {
-                    mainHandler.removeCallbacks(gesture.longPressRunnable)
-                }
-                if (!gesture.consumedPeekRestore) {
-                    params.x = gesture.startX + (event.rawX - gesture.downX).toInt()
-                    params.y = gesture.startY + (event.rawY - gesture.downY).toInt()
-                    try {
-                        wm.updateViewLayout(view, params)
-                        updateFeedbackPosition()
-                    } catch (_: Exception) {
-                    }
-                }
-                true
-            }
-
-            MotionEvent.ACTION_UP -> {
-                mainHandler.removeCallbacks(gesture.longPressRunnable)
-                armIdlePeekTimer()
-                if (gesture.consumedPeekRestore) return true
-                if (gesture.longPressFired) return true
-                val moved = abs(event.rawX - gesture.downX) + abs(event.rawY - gesture.downY)
-                if (moved < dp(FloatingMicPolicy.TAP_THRESHOLD_DP)) {
-                    onButtonTapped()
-                } else {
-                    val size = dp(BUTTON_DP)
-                    val margin = dp(MARGIN_DP)
-                    params.x = FloatingMicPolicy.dockedX(params.x, screenWidth, size, margin)
-                    params.y = FloatingMicPolicy.clampY(params.y, screenHeight, size, margin)
-                    try {
-                        wm.updateViewLayout(view, params)
-                        updateFeedbackPosition()
-                    } catch (_: Exception) {
-                    }
-                    getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
-                        .putInt(PREF_X, params.x)
-                        .putInt(PREF_Y, params.y)
-                        .apply()
-                }
-                true
-            }
-
-            MotionEvent.ACTION_CANCEL -> {
-                mainHandler.removeCallbacks(gesture.longPressRunnable)
-                armIdlePeekTimer()
-                true
-            }
-
-            else -> false
+        } else {
+            updatePreviewPosition()
         }
     }
 
-    private class GestureState {
-        var downX = 0f
-        var downY = 0f
-        var startX = 0
-        var startY = 0
-        var consumedPeekRestore = false
-        var longPressFired = false
-        var longPressRunnable: Runnable = Runnable {}
+    private fun hideLivePreview() {
+        mainHandler.removeCallbacks(livePreviewRunnable)
+        val wm = windowManager
+        val view = previewView
+        if (previewAttached && wm != null && view != null) {
+            try {
+                wm.removeView(view)
+            } catch (_: Exception) {
+                // Window already torn down by framework.
+            }
+        }
+        previewAttached = false
     }
 
-    private fun onButtonTapped() {
+    private fun onMicTapped() {
         when (state) {
-            State.IDLE -> startDictation()
-            State.RECORDING -> stopDictation()
-            State.TRANSCRIBING -> cancelCurrentWork()
-            State.ERROR -> {
-                setState(State.IDLE)
+            State.IDLE, State.ERROR -> {
+                if (!refreshEditorTarget()) {
+                    hideOverlay()
+                    return
+                }
                 startDictation()
             }
+
+            State.RECORDING -> stopAndTranscribe()
+            State.TRANSCRIBING -> Unit
         }
+    }
+
+    private fun onLongPress(anchor: View) {
+        if (isBusy()) {
+            cancelWork()
+            Toast.makeText(this, R.string.ime_cancel, Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val popup = PopupMenu(overlayContext ?: this, anchor)
+            popup.menu.add(0, MENU_SETTINGS, 0, R.string.ime_settings)
+            popup.setOnMenuItemClickListener { item ->
+                if (item.itemId == MENU_SETTINGS) openSettings()
+                true
+            }
+            popup.setOnDismissListener { schedulePeek() }
+            popup.show()
+        } catch (_: Exception) {
+            openSettings()
+        }
+    }
+
+    private fun openSettings() {
+        val intent = Intent(this, SettingsActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        startActivity(intent)
     }
 
     private fun startDictation() {
-        if (targetNode == null) {
-            showFeedback("Place the cursor in a text field")
-            return
-        }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
-            PackageManager.PERMISSION_GRANTED
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
         ) {
-            pendingPermissionTap = true
-            showFeedback("Allow microphone access, then return here")
-            try {
-                startActivity(Intent(this, MicPermissionActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                })
-            } catch (t: Throwable) {
-                pendingPermissionTap = false
-                showError("Microphone permission is required")
+            val intent = Intent(this, MicPermissionActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_HISTORY)
             }
+            startActivity(intent)
             return
         }
-        val keys = normalizeKeys(settings.apiKeys)
-        if (keys.isEmpty()) {
-            showError("Add an API key in Settings")
+        val apiKeys = settings.apiKeys
+        val baseUrl = settings.baseUrl
+        if (apiKeys.isEmpty() || baseUrl.isEmpty()) {
+            showError(getString(R.string.ime_error_no_key))
+            openSettings()
             return
         }
+        val model = settings.model
+        val customPrompt = settings.customPrompt
+        val smartMode = settings.smartMode
 
-        cancelIdlePeekTimer()
-        stopPulse()
+        cancelWork()
+        val rec = AudioRecorder()
+        val useLive = LlmClient.isLiveModel(model)
+        if (useLive) {
+            startLiveSession(rec, apiKeys, baseUrl, model, customPrompt, smartMode)
+        }
+        try {
+            rec.start { amp ->
+                mainHandler.post { button?.level = amp }
+            }
+        } catch (_: Exception) {
+            liveStreamingSession?.close()
+            liveStreamingSession = null
+            rec.discard()
+            showError(getString(R.string.ime_error_mic))
+            return
+        }
+        recorder = rec
+        setState(State.RECORDING)
+    }
+
+    private fun startLiveSession(
+        rec: AudioRecorder,
+        apiKeys: List<String>,
+        baseUrl: String,
+        model: String,
+        customPrompt: String,
+        smartMode: Boolean,
+    ) {
         liveFinalParts.setLength(0)
         liveLastInterim = ""
-        hideFeedback()
-        setState(State.RECORDING)
-        val model = settings.model
-        val sessionId = liveGuard.next()
-        liveSessionId = sessionId
-        val session = if (requiresLive(model)) {
-            llm.startLiveSession(
-                key = keys[keyCursor % keys.size],
-                baseUrl = settings.baseUrl,
-                model = model,
-                smartMode = settings.smartMode,
-                onState = { lifecycle ->
-                    mainHandler.post {
-                        when (lifecycle) {
-                            LiveSessionState.SERVER_GOING_AWAY -> {
-                                if (state == State.RECORDING) {
-                                    stopDictation(LiveSessionState.SERVER_GOING_AWAY)
-                                }
-                            }
-                            LiveSessionState.NETWORK_FAILURE -> {
-                                if (state == State.RECORDING) {
-                                    cancelCurrentWork()
-                                }
-                            }
-                            else -> Unit
-                        }
-                    }
-                },
-                onInterim = { text ->
-                    mainHandler.post {
-                        if (state == State.RECORDING && liveGuard.isCurrent(sessionId)) {
-                            liveLastInterim = text
-                            renderLivePreview()
-                        }
-                    }
-                },
-                onFinal = { text ->
-                    mainHandler.post {
-                        if ((state == State.RECORDING || state == State.TRANSCRIBING) &&
-                            liveGuard.isCurrent(sessionId)
-                        ) {
-                            liveFinalParts.append(text)
-                            renderLivePreview()
-                        }
-                    }
-                },
-                onError = { message ->
-                    mainHandler.post {
-                        if (liveGuard.isCurrent(sessionId)) {
-                            cancelCurrentWork()
-                            showError(message)
-                        }
-                    }
-                },
-            )
-        } else {
-            null
-        }
-        liveSession = session
+        val key = apiKeys[keyCursor.coerceIn(0, apiKeys.size - 1)]
+        val session = llm.openLiveSession(
+            apiKey = key,
+            baseUrl = baseUrl,
+            model = model,
+            customPrompt = customPrompt,
+            smartMode = smartMode,
+            listener = object : LiveSession.Listener {
+                override fun onReady() = Unit
 
-        val rec = AudioRecorder(
-            context = this,
-            onLevel = {},
-            onPcmChunk = { pcm -> session?.sendPcm(pcm) },
+                override fun onTranscript(text: String, finished: Boolean) {
+                    if (finished) {
+                        if (text.isNotEmpty()) {
+                            if (liveFinalParts.isNotEmpty() &&
+                                !liveFinalParts.endsWith(" ") &&
+                                !text.startsWith(" ")
+                            ) {
+                                liveFinalParts.append(' ')
+                            }
+                            liveFinalParts.append(text)
+                        }
+                        liveLastInterim = ""
+                    } else {
+                        liveLastInterim = text
+                    }
+                    postLivePreviewUpdate()
+                }
+
+                override fun onTurnComplete() = Unit
+                override fun onError(message: String, rateLimited: Boolean) = Unit
+            },
         )
-        recorder = rec
-        try {
-            rec.start()
-        } catch (_: Exception) {
-            recorder = null
-            session?.close()
-            liveSession = null
-            showError("Microphone unavailable")
+        liveStreamingSession = session
+        rec.pcmChunkListener = { chunk, len -> session.offerPcm(chunk, len) }
+    }
+
+    private fun stopAndTranscribe() {
+        val rec = recorder ?: return
+        recorder = null
+        val liveSession = liveStreamingSession
+        liveStreamingSession = null
+        setState(State.TRANSCRIBING)
+
+        val apiKeys = settings.apiKeys
+        val baseUrl = settings.baseUrl
+        val model = settings.model
+        val customPrompt = settings.customPrompt
+        val smartMode = settings.smartMode
+        val start = keyCursor
+
+        if (liveSession != null) {
+            liveSession.detach()
+            liveCommitJob = serviceScope.launch {
+                val stopResult = try {
+                    withContext(Dispatchers.IO) { rec.stop() }
+                } catch (_: Exception) {
+                    liveSession.close()
+                    showError(getString(R.string.ime_error_no_audio))
+                    return@launch
+                }
+                if (stopResult.bytes.size <= 44) {
+                    liveSession.close()
+                    showError(getString(R.string.ime_error_no_audio))
+                    return@launch
+                }
+                if (!stopResult.speechDetected) {
+                    liveSession.close()
+                    showError(getString(R.string.ime_error_no_speech))
+                    return@launch
+                }
+                val liveText = try {
+                    withContext(Dispatchers.IO) { liveSession.finishAndAwait() }
+                } catch (ce: CancellationException) {
+                    liveSession.close()
+                    throw ce
+                } catch (_: Exception) {
+                    null
+                }
+                if (!liveText.isNullOrBlank()) {
+                    if (apiKeys.isNotEmpty()) keyCursor = (start + 1) % apiKeys.size
+                    deliverTranscript(liveText)
+                    return@launch
+                }
+                runBatchFallback(stopResult.bytes, apiKeys, baseUrl, model, start, customPrompt, smartMode)
+            }
             return
         }
-        button?.performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
-        startPulse()
-        capRunnable = Runnable {
-            if (state == State.RECORDING) stopDictation(LiveSessionState.SESSION_LIMIT_REACHED)
-        }.also { mainHandler.postDelayed(it, RECORD_CAP_MS) }
-    }
 
-    /**
-     * Shows the latest replaceable hypothesis in the floating bubble only.
-     * The editor is deliberately untouched until the final transcript is
-     * committed after the user stops recording.
-     */
-    private fun renderLivePreview() {
-        val preview = FloatingMicPolicy.mergeLivePreview(
-            liveFinalParts.toString(),
-            liveLastInterim,
-        )
-        if (preview.isNotEmpty()) showLivePreview(preview)
-    }
-
-    private fun stopDictation(reason: LiveSessionState = LiveSessionState.USER_STOPPED) {
-        if (state != State.RECORDING) return
-        cancelIdlePeekTimer()
-        stopPulse()
-        capRunnable?.let(mainHandler::removeCallbacks)
-        capRunnable = null
-        val rec = recorder
-        recorder = null
-        val session = liveSession
-        liveSession = null
-        session?.detach()
-        handedOffLiveSession = session
-        setState(State.TRANSCRIBING)
-        workJob?.cancel()
-        val sessionId = liveSessionId
-        workJob = serviceScope.launch {
-            val captured = try {
-                withContext(Dispatchers.IO) { rec?.stop() ?: (ByteArray(0) to 0f) }
-            } catch (e: CancellationException) {
-                throw e
+        transcribeJob = serviceScope.launch {
+            val stopResult = try {
+                withContext(Dispatchers.IO) { rec.stop() }
             } catch (_: Exception) {
-                ByteArray(0) to 0f
+                showError(getString(R.string.ime_error_no_audio))
+                return@launch
             }
+            if (stopResult.bytes.size <= 44) {
+                showError(getString(R.string.ime_error_no_audio))
+                return@launch
+            }
+            if (!stopResult.speechDetected) {
+                showError(getString(R.string.ime_error_no_speech))
+                return@launch
+            }
+            runBatchFallback(stopResult.bytes, apiKeys, baseUrl, model, start, customPrompt, smartMode)
+        }
+    }
 
-            if (session != null) {
-                session.finish(reason)
-                session.awaitFinal(LIVE_FINAL_TIMEOUT_MS)
-                session.close()
-                handedOffLiveSession = null
-                if (!liveGuard.isCurrent(sessionId)) return@launch
-                val text = liveFinalParts.toString().trim().ifEmpty { liveLastInterim.trim() }
-                if (text.isBlank() && AudioRecorder.isSilent(captured.second)) {
-                    showError("No speech detected — try again")
-                } else if (text.isBlank()) {
-                    showError("Got empty transcript — try again")
-                } else {
-                    val liveKeys = normalizeKeys(settings.apiKeys)
-                    if (liveKeys.isNotEmpty()) keyCursor = (keyCursor + 1) % liveKeys.size
-                    deliverTranscript(text)
-                }
-                return@launch
-            }
-
-            if (AudioRecorder.isSilent(captured.second) || captured.first.size <= 1_000) {
-                showError("No speech detected — try again")
-                return@launch
-            }
-            val result = try {
-                llm.transcribe(
-                    wav = captured.first,
-                    apiKeys = settings.apiKeys,
-                    baseUrl = settings.baseUrl,
-                    model = settings.model,
-                    startIndex = keyCursor,
-                    customPrompt = settings.customPrompt,
-                    smartMode = settings.smartMode,
-                )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: TranscribeException) {
-                showError(e.message ?: "Transcription failed")
-                return@launch
-            }
-            val batchKeys = normalizeKeys(settings.apiKeys)
-            if (batchKeys.isNotEmpty()) keyCursor = (result.second + 1) % batchKeys.size
-            deliverTranscript(result.first)
+    private suspend fun runBatchFallback(
+        wav: ByteArray,
+        apiKeys: List<String>,
+        baseUrl: String,
+        model: String,
+        start: Int,
+        customPrompt: String,
+        smartMode: Boolean,
+    ) {
+        try {
+            val (transcript, usedIndex) = llm.transcribe(
+                wav,
+                apiKeys,
+                baseUrl,
+                model,
+                start,
+                customPrompt,
+                smartMode,
+            )
+            if (apiKeys.isNotEmpty()) keyCursor = (usedIndex + 1) % apiKeys.size
+            deliverTranscript(transcript)
+        } catch (e: TranscribeException) {
+            showError(e.message ?: getString(R.string.ime_error_network))
         }
     }
 
     private fun deliverTranscript(text: String) {
-        val clean = text.trim()
-        if (clean.isEmpty()) {
-            showError("Got empty transcript — try again")
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) {
+            showError(getString(R.string.ime_error_empty))
             return
         }
-        if (targetNode == null) {
-            showError("Cursor unavailable — try again")
-            return
-        }
-        val inserted = insertAtCursor(clean)
-        if (inserted) {
-            setState(State.IDLE)
-            showFeedback("Inserted")
-            button?.performHapticFeedback(
-                if (android.os.Build.VERSION.SDK_INT >= 30) {
-                    android.view.HapticFeedbackConstants.CONFIRM
-                } else {
-                    android.view.HapticFeedbackConstants.KEYBOARD_TAP
-                },
-            )
+        val clean = ClipboardPolicy.truncateCommit(trimmed)
+        maybeSaveTranscriptToHistory(clean)
+
+        val stillEligible = refreshEditorTarget()
+        val inserted = if (stillEligible) {
+            commitViaInputMethod(clean, requireEditableInputType = true) ||
+                insertIntoNode(targetNode, clean) ||
+                pasteIntoNode(targetNode, clean) ||
+                commitViaInputMethod(clean, requireEditableInputType = false)
         } else {
-            setState(State.ERROR)
-            showFeedback("Copied — tap to paste", durationMs = 6_000L)
+            false
         }
-        armIdlePeekTimer()
+        if (!inserted) {
+            copyToClipboard(clean)
+            Toast.makeText(this, R.string.ime_copied_paste, Toast.LENGTH_SHORT).show()
+        } else if (clean.length != trimmed.length) {
+            Toast.makeText(this, R.string.ime_commit_truncated, Toast.LENGTH_LONG).show()
+        }
+        setState(State.IDLE)
+        hapticConfirm()
+        refreshFocus(eventSource = null, eventConfirmsSelection = false)
+    }
+
+    private fun maybeSaveTranscriptToHistory(clean: String) {
+        if (!ClipboardHistoryActivity.isEnabled(this)) return
+        if (!ClipboardPolicy.shouldCapture(clean)) return
+        val maxItems = ClipboardHistoryActivity.maxCount(this)
+        val ttl = ClipboardHistoryActivity.ttlMs(this)
+        serviceScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val store = clipboardStore ?: ClipboardStore.forContext(this@FloatingMicAccessibilityService)
+                        .also {
+                            it.enabled = true
+                            it.maxUnpinned = maxItems
+                            it.ttlMs = ttl
+                            it.load()
+                            clipboardStore = it
+                        }
+                    store.enabled = true
+                    store.maxUnpinned = maxItems
+                    store.ttlMs = ttl
+                    store.add(clean)
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (_: Exception) {
+                // Local history persistence is best-effort.
+            }
+        }
+    }
+
+    private fun commitViaInputMethod(
+        text: String,
+        requireEditableInputType: Boolean,
+    ): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return false
+        return FloatingEditorResolver.Api33Helper.commitText(
+            service = this,
+            text = text,
+            ownPackageName = packageName,
+            requireEditableInputType = requireEditableInputType,
+        )
     }
 
     /**
-     * Directly replaces the selected range with the transcript, preserving
-     * text before and after the cursor. A clipboard/paste fallback covers
-     * Compose and custom editors that do not expose ACTION_SET_TEXT.
+     * Splices [text] into [node] at the current selection using ACTION_SET_TEXT,
+     * then places the cursor after the inserted text. Re-validates password and
+     * own-package boundaries after `node.refresh()`.
      */
-    private fun insertAtCursor(text: String): Boolean {
-        val node = targetNode ?: return false
+    private fun insertIntoNode(node: AccessibilityNodeInfo?, text: String): Boolean {
+        if (node == null) return false
         try {
             node.refresh()
-            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-            val current = FloatingMicPolicy.textForInsertion(
-                node.text?.toString(),
-                node.hintText?.toString(),
-                node.isShowingHintText,
-            )
-            if (current != null) {
-                val rawStart = node.textSelectionStart
-                val rawEnd = node.textSelectionEnd
-                val start = if (rawStart < 0) current.length else rawStart.coerceIn(0, current.length)
-                val end = if (rawEnd < 0) start else rawEnd.coerceIn(start, current.length)
-                val replacement = current.substring(0, start) + text + current.substring(end)
-                val args = Bundle().apply {
-                    putCharSequence(
-                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-                        replacement,
-                    )
-                }
-                if (node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-                    val cursor = start + text.length
-                    val selection = Bundle().apply {
-                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
-                        putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
-                    }
-                    node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selection)
-                    return true
-                }
-            }
         } catch (_: Exception) {
-            // Fall through to the platform paste action.
+            // Continue with the best snapshot we have.
+        }
+        val pkg = node.packageName?.toString()
+        if (node.isPassword ||
+            FloatingMicPolicy.isPasswordInputType(node.inputType) ||
+            pkg == packageName
+        ) {
+            return false
+        }
+        val hasSetText = try {
+            node.actionList.any {
+                it.id == AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT.id
+            }
+        } catch (_: Throwable) {
+            false
+        }
+        if (!node.isEditable && !hasSetText && !FloatingMicPolicy.isEditableClassName(node.className?.toString())) {
+            return false
         }
 
-        return pasteFromClipboard(text, node)
+        val current = FloatingMicPolicy.textForInsertion(
+            text = node.text?.toString(),
+            hintText = node.hintText?.toString(),
+            showingHintText = node.isShowingHintText,
+        ) ?: ""
+        val selStart = node.textSelectionStart
+        val selEnd = node.textSelectionEnd
+        val start: Int
+        val end: Int
+        if (selStart >= 0 && selEnd >= 0 && selStart <= current.length && selEnd <= current.length) {
+            start = minOf(selStart, selEnd)
+            end = maxOf(selStart, selEnd)
+        } else {
+            start = current.length
+            end = current.length
+        }
+        val replacement = current.substring(0, start) + text + current.substring(end)
+        val setArgs = Bundle().apply {
+            putCharSequence(
+                AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                replacement,
+            )
+        }
+        val applied = try {
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, setArgs)
+        } catch (_: Throwable) {
+            false
+        }
+        if (!applied) return false
+        val newCursor = start + text.length
+        val selArgs = Bundle().apply {
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, newCursor)
+            putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, newCursor)
+        }
+        try {
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs)
+        } catch (_: Throwable) {
+            // Cursor placement is best-effort once text was applied.
+        }
+        return true
     }
 
-    private fun pasteFromClipboard(text: String, node: AccessibilityNodeInfo): Boolean {
+    private fun pasteIntoNode(node: AccessibilityNodeInfo?, text: String): Boolean {
+        copyToClipboard(text)
+        if (node == null) return false
+        try {
+            node.refresh()
+        } catch (_: Throwable) {
+            // Ignore refresh errors and inspect current node snapshot.
+        }
+        val pkg = node.packageName?.toString()
+        if (node.isPassword ||
+            FloatingMicPolicy.isPasswordInputType(node.inputType) ||
+            pkg == packageName
+        ) {
+            return false
+        }
         return try {
-            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("Voice IME", text))
-            node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
             node.performAction(AccessibilityNodeInfo.ACTION_PASTE)
-        } catch (_: Exception) {
+        } catch (_: Throwable) {
             false
         }
     }
 
-    private fun showError(message: String) {
-        stopPulse()
-        setState(State.ERROR)
-        showFeedback(message, durationMs = 4_000L)
-    }
-
-    private fun onPermissionResult(granted: Boolean) {
-        if (!pendingPermissionTap) return
-        pendingPermissionTap = false
-        if (granted) {
-            mainHandler.post { if (state == State.IDLE) startDictation() }
-        } else {
-            mainHandler.post { showError("Microphone permission is required") }
-        }
-    }
-
-    private fun cancelCurrentWork() {
-        pendingPermissionTap = false
-        capRunnable?.let(mainHandler::removeCallbacks)
-        hideFeedback()
-        capRunnable = null
-        liveGuard.next()
-        workJob?.cancel()
-        workJob = null
-        llm.cancel()
-        val session = liveSession
-        liveSession = null
-        val handedOff = handedOffLiveSession
-        handedOffLiveSession = null
+    private fun copyToClipboard(text: String) {
         try {
-            session?.close()
-            handedOff?.close()
+            val cm = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("voice-ime", text))
         } catch (_: Exception) {
+            // Nothing else we can safely do without an active InputConnection.
         }
+    }
+
+    private fun showError(message: String) {
+        setState(State.ERROR)
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        mainHandler.removeCallbacks(clearErrorRunnable)
+        mainHandler.postDelayed(clearErrorRunnable, ERROR_DISPLAY_MS)
+    }
+
+    private fun cancelWork() {
+        mainHandler.removeCallbacks(clearErrorRunnable)
+        hideLivePreview()
+        transcribeJob?.cancel()
+        transcribeJob = null
+        liveCommitJob?.cancel()
+        liveCommitJob = null
+        llm.cancel()
+        val attachedSession = liveStreamingSession
+        liveStreamingSession = null
+        if (attachedSession != null && !attachedSession.isDetached()) {
+            try {
+                attachedSession.close()
+            } catch (_: Exception) {
+                // Already closed.
+            }
+        }
+        liveFinalParts.setLength(0)
+        liveLastInterim = ""
         val rec = recorder
         recorder = null
         if (rec != null) {
@@ -816,247 +1294,95 @@ class FloatingMicAccessibilityService : AccessibilityService() {
                 try {
                     rec.discard()
                 } catch (_: Exception) {
+                    // Best-effort mic release.
                 }
             }
         }
-        liveFinalParts.setLength(0)
-        liveLastInterim = ""
-        stopPulse()
-        setState(State.IDLE)
-        armIdlePeekTimer()
+        if (state != State.IDLE) {
+            setState(State.IDLE)
+        }
     }
 
     private fun setState(next: State) {
         state = next
-        button?.setState(next.toViewState())
-        if (next != State.IDLE) cancelIdlePeekTimer()
-        if (next != State.RECORDING) stopPulse()
-        if (next == State.IDLE) armIdlePeekTimer()
-    }
-
-    private fun State.toViewState(): FloatingMicView.State = when (this) {
-        State.IDLE -> FloatingMicView.State.IDLE
-        State.RECORDING -> FloatingMicView.State.RECORDING
-        State.TRANSCRIBING -> FloatingMicView.State.TRANSCRIBING
-        State.ERROR -> FloatingMicView.State.ERROR
-    }
-
-    private fun startPulse() {
-        if (isReducedMotionEnabled()) return
-        val view = button ?: return
-        view.animate().cancel()
-        view.alpha = 1f
-        view.animate().alpha(0.4f).setDuration(500L).withEndAction {
-            view.animate().alpha(1f).setDuration(500L).withEndAction {
-                if (state == State.RECORDING) startPulse()
-            }.start()
-        }.start()
-    }
-
-    private fun stopPulse() {
-        button?.animate()?.cancel()
-        button?.alpha = 1f
-    }
-
-    private fun isReducedMotionEnabled(): Boolean = try {
-        Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE) == 0f
-    } catch (_: Settings.SettingNotFoundException) {
-        false
-    }
-
-    private fun armIdlePeekTimer() {
-        cancelIdlePeekTimer()
-        if (state != State.IDLE || button == null || targetNode == null) return
-        val peekRunnable = Runnable { attemptPeek() }
-        idlePeekRunnable = peekRunnable
-        mainHandler.postDelayed(peekRunnable, FloatingMicPolicy.PEEK_DELAY_MS)
-    }
-
-    private fun cancelIdlePeekTimer() {
-        idlePeekRunnable?.let(mainHandler::removeCallbacks)
-        idlePeekRunnable = null
-        peekRestoreRunnable?.let(mainHandler::removeCallbacks)
-        peekRestoreRunnable = null
-    }
-
-    private fun attemptPeek() {
-        val params = buttonParams ?: return
-        if (state != State.IDLE || isPeeked || button == null) return
-        isPeeked = true
-        prePeekX = params.x
-        val visible = dp(FloatingMicPolicy.PEEK_VISIBLE_DP)
-        val target = FloatingMicPolicy.peekedX(
-            params.x,
-            screenWidth,
-            params.width,
-            visible,
-            insetPx = 0,
-        )
-        animateButtonX(target)
-        // Keep the edge sliver discoverable but do not leave it there forever:
-        // after a brief 700 ms peek, restore the full button and restart the
-        // normal idle timer. The resulting 700 ms + 220 ms animation is under
-        // one second, then the same cycle repeats while the editor remains idle.
-        val restore = Runnable {
-            peekRestoreRunnable = null
-            if (state == State.IDLE && isPeeked) restoreFromPeek()
+        if (next != State.RECORDING && next != State.TRANSCRIBING) {
+            hideLivePreview()
+            liveFinalParts.setLength(0)
+            liveLastInterim = ""
         }
-        peekRestoreRunnable = restore
-        mainHandler.postDelayed(restore, FloatingMicPolicy.PEEK_RESTORE_DELAY_MS)
-    }
-
-    private fun restoreFromPeek() {
-        if (!isPeeked) return
-        peekRestoreRunnable?.let(mainHandler::removeCallbacks)
-        peekRestoreRunnable = null
-        val params = buttonParams ?: return
-        val target = prePeekX ?: FloatingMicPolicy.dockedX(
-            params.x,
-            screenWidth,
-            params.width,
-            dp(MARGIN_DP),
-        )
-        isPeeked = false
-        prePeekX = null
-        animateButtonX(target)
-        armIdlePeekTimer()
-    }
-
-    private fun animateButtonX(targetX: Int) {
-        val params = buttonParams ?: return
-        val view = button ?: return
-        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        peekAnimator?.cancel()
-        if (isReducedMotionEnabled()) {
-            params.x = targetX
-            try {
-                wm.updateViewLayout(view, params)
-                updateFeedbackPosition()
-            } catch (_: Exception) {
-            }
-            return
+        val keepAwake = next == State.RECORDING || next == State.TRANSCRIBING
+        button?.keepScreenOn = keepAwake
+        button?.visualState = when (next) {
+            State.IDLE -> FloatingMicView.VisualState.IDLE
+            State.RECORDING -> FloatingMicView.VisualState.RECORDING
+            State.TRANSCRIBING -> FloatingMicView.VisualState.TRANSCRIBING
+            State.ERROR -> FloatingMicView.VisualState.ERROR
         }
-        peekAnimator = android.animation.ValueAnimator.ofInt(params.x, targetX).apply {
-            duration = FloatingMicPolicy.PEEK_ANIMATION_MS
-            addUpdateListener { animation ->
-                params.x = animation.animatedValue as Int
-                try {
-                    wm.updateViewLayout(view, params)
-                    updateFeedbackPosition()
-                } catch (_: Exception) {
-                    cancel()
-                }
-            }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    peekAnimator = null
-                }
-
-                override fun onAnimationCancel(animation: android.animation.Animator) {
-                    peekAnimator = null
-                }
-            })
-        }.also { it.start() }
-    }
-
-    private fun hideFeedback() {
-        feedbackHideRunnable?.let(mainHandler::removeCallbacks)
-        feedbackHideRunnable = null
-        feedback?.animate()?.cancel()
-        feedback?.alpha = 0f
-    }
-
-    private fun showLivePreview(text: String) {
-        mainHandler.post {
-            val view = feedback ?: return@post
-            // Keep the newest tail visible once the bubble reaches its compact
-            // display limit; old words roll away from the leading side.
-            view.text = FloatingMicPolicy.livePreviewTail(text, LIVE_PREVIEW_MAX_CHARS)
-            view.visibility = View.VISIBLE
-            view.animate().cancel()
-            view.alpha = 1f
-            updateFeedbackPosition()
-            view.post { if (feedback === view) updateFeedbackPosition() }
-            feedbackHideRunnable?.let(mainHandler::removeCallbacks)
-            feedbackHideRunnable = null
+        button?.contentDescription = when (next) {
+            State.RECORDING -> getString(R.string.ime_mic_stop_description)
+            State.TRANSCRIBING -> getString(R.string.ime_status_uploading)
+            else -> getString(R.string.ime_mic_description)
         }
-    }
-
-    private fun showFeedback(text: String, durationMs: Long = FEEDBACK_DURATION_MS) {
-        mainHandler.post {
-            val view = feedback ?: return@post
-            view.text = text
-            view.visibility = View.VISIBLE
-            view.animate().cancel()
-            view.alpha = 0f
-            updateFeedbackPosition()
-            view.animate().alpha(1f).setDuration(120L).start()
-            view.post { if (feedback === view) updateFeedbackPosition() }
-            feedbackHideRunnable?.let(mainHandler::removeCallbacks)
-            val hideRunnable = Runnable {
-                view.animate().alpha(0f).setDuration(180L).start()
-            }
-            feedbackHideRunnable = hideRunnable
-            mainHandler.postDelayed(hideRunnable, durationMs)
-        }
-    }
-
-    private fun updateFeedbackPosition() {
-        val bubble = feedback ?: return
-        val bubbleParams = feedbackParams ?: return
-        val params = buttonParams ?: return
-        val margin = dp(MARGIN_DP)
-        val gap = dp(FEEDBACK_OFFSET_DP)
-        val measuredHeight = bubble.height.coerceAtLeast(dp(40))
-        val maxX = (screenWidth - bubble.width - margin).coerceAtLeast(margin)
-        bubbleParams.x = (params.x - gap).coerceIn(margin, maxX)
-        val opensUp = params.y + params.height / 2 > screenHeight / 2
-        bubbleParams.y = if (opensUp) {
-            (params.y - measuredHeight - margin).coerceAtLeast(margin)
+        if (next == State.RECORDING || next == State.TRANSCRIBING || next == State.ERROR) {
+            mainHandler.removeCallbacks(peekRunnable)
+            mainHandler.removeCallbacks(peekRestoreRunnable)
+            if (peeked) animatePeek(false)
         } else {
-            (params.y + params.height + margin).coerceAtMost(screenHeight - measuredHeight - margin)
-        }
-        try {
-            (getSystemService(WINDOW_SERVICE) as WindowManager).updateViewLayout(bubble, bubbleParams)
-        } catch (_: Exception) {
+            schedulePeek()
         }
     }
 
-    private fun removeOverlay() {
-        cancelIdlePeekTimer()
-        feedbackHideRunnable?.let(mainHandler::removeCallbacks)
-        feedbackHideRunnable = null
-        peekAnimator?.cancel()
-        peekAnimator = null
-        isPeeked = false
-        prePeekX = null
-        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-        feedback?.let { safeRemove(wm, it) }
-        button?.let { safeRemove(wm, it) }
-        feedback = null
-        button = null
-        feedbackParams = null
-        buttonParams = null
+    private fun isBusy(): Boolean = state == State.RECORDING || state == State.TRANSCRIBING
+
+    private fun hapticTap(view: View) {
+        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
     }
 
-    private fun safeRemove(wm: WindowManager, view: View) {
-        try {
-            wm.removeView(view)
-        } catch (_: IllegalArgumentException) {
-            // The accessibility window token may already be gone.
-        } catch (_: Exception) {
+    private fun hapticConfirm() {
+        val view = button ?: return
+        val constant = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            HapticFeedbackConstants.CONFIRM
+        } else {
+            HapticFeedbackConstants.KEYBOARD_TAP
         }
+        view.performHapticFeedback(constant)
     }
 
-    private fun teardown() {
-        cancelCurrentWork()
-        try {
-            targetNode?.recycle()
-        } catch (_: Exception) {
-        }
-        targetNode = null
-        removeOverlay()
+    private fun buttonSizePx(): Int = dp(FloatingMicView.WINDOW_DP)
+
+    private fun dp(value: Int): Int {
+        val dm = (overlayContext ?: this).resources.displayMetrics
+        return TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            value.toFloat(),
+            dm,
+        ).toInt()
     }
 
-    private fun dp(value: Int): Int = (value * dp).toInt()
+    companion object {
+        @Volatile
+        private var connectedInstance = false
+
+        /**
+         * True when Android's AccessibilityManagerService has an active live
+         * binder connection to [FloatingMicAccessibilityService]. Used by
+         * [SettingsActivity] to diagnose Samsung One UI Deep Sleep / stalled
+         * accessibility bindings where Settings.Secure still marks the service
+         * enabled while the process was stopped in the background.
+         */
+        fun isServiceConnected(): Boolean = connectedInstance
+
+        private const val EDGE_MARGIN_DP = 6
+        private const val PREVIEW_GAP_DP = 8
+        private const val PREVIEW_CORNER_DP = 14
+        private const val PREVIEW_MAX_WIDTH_DP = 232
+        private const val PREVIEW_TAIL_CHARS = 76
+        private const val ERROR_DISPLAY_MS = 2_600L
+        private const val MENU_SETTINGS = 1
+        private const val PREFS_OVERLAY = "voice_ime_floating_overlay"
+        private const val PREF_X = "x"
+        private const val PREF_Y = "y"
+        private const val PREF_DOCK_RIGHT = "dock_right"
+        private const val PREF_Y_FRACTION = "y_fraction"
+    }
 }

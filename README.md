@@ -91,13 +91,16 @@ microphone:
   off the UI thread so Stop never janks; granting mic permission auto-resumes a
   pending tap; blocked-mic detection hints when another app holds the mic.
 - **System floating button** — Optional AccessibilityService mode shows a
-  draggable mic whenever a non-password editable field has input focus, with
-  the same edge-peek, restore, recording pulse, state colors, and focused-cursor
-  insertion pattern as the dedicated keyboard. It resolves input focus across
-  interactive windows so keyboard/handwriting surfaces don't hide a still-focused
-  editor. On S Pen tablets, hovering alone is not input focus; tap the field to
-  place the caret. It reuses this app's `AudioRecorder`, `SettingsStore`, and
-  `LlmClient`; it does not add a second backend.
+  draggable mic whenever a non-password editable cursor is active, with edge
+  peek, restore, recording pulse, live-transcript preview bubble, and direct
+  caret insertion (`AccessibilityInputConnection.commitText` on Android 13+,
+  `ACTION_SET_TEXT`, and `ACTION_PASTE` fallback). Built for phones and Samsung
+  Galaxy Tab (Android 16/17): resolves editors across Jetpack Compose, Chrome /
+  WebView (`contenteditable` & canvas), split-screen, freeform/pop-up windows,
+  App Bubbles, Samsung DeX external displays, S Pen taps, and physical Book
+  Cover Keyboards. On S Pen tablets, hovering alone is not input focus; tap the
+  field to place the caret. Reuses `AudioRecorder`, `SettingsStore`, and
+  `LlmClient` with zero extra backend.
 
 ---
 
