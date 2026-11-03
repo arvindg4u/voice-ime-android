@@ -43,8 +43,8 @@ class AudioRecorderTest {
     }
 
     @Test
-    fun `max duration is five minutes`() {
-        assertEquals(300_000L, AudioRecorder.MAX_DURATION_MS)
+    fun `max duration is ten minutes`() {
+        assertEquals(600_000L, AudioRecorder.MAX_DURATION_MS)
     }
 
     @Test

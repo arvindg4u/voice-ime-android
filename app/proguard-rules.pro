@@ -1,11 +1,13 @@
 # Voice IME release rules. R8 full-mode handles the rest (kotlinx.serialization
 # not used; org.json is Android framework and needs no rules).
 
-# IME entry point + activities referenced from AndroidManifest.xml.
+# IME + Accessibility entry points + activities referenced from AndroidManifest.xml.
 -keep public class com.voiceime.VoiceImeService
+-keep public class com.voiceime.FloatingMicAccessibilityService { *; }
 -keep public class com.voiceime.SettingsActivity
 -keep public class com.voiceime.MicPermissionActivity
 -keep public class com.voiceime.ClipboardHistoryActivity
+-dontwarn android.accessibilityservice.InputMethod*
 
 # Custom view inflated from XML by name.
 -keep public class com.voiceime.WaveformView {

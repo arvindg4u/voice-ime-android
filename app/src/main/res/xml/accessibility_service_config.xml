@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Focus-only accessibility contract for the floating dictation button.
+
+    We deliberately do not subscribe to content-changed or text-changed events
+    and never log editor text. The service receives click/long-click, input-
+    focus, selection, and window-transition events, and on Android 13+ also
+    receives direct InputMethod editor start/finish callbacks via
+    flagInputMethodEditor. flagIncludeNotImportantViews lets focus discovery
+    reach custom/hybrid editors whose wrapper layouts omit accessibility
+    importance, and isAccessibilityTool declares this genuine voice-input
+    assistive surface for Android 14–17.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewClicked|typeViewLongClicked|typeViewFocused|typeViewTextSelectionChanged|typeWindowStateChanged|typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews|flagInputMethodEditor"
+    android:canRetrieveWindowContent="true"
+    android:isAccessibilityTool="true"
+    android:notificationTimeout="0"
+    android:settingsActivity="com.voiceime.SettingsActivity"
+    android:description="@string/accessibility_description" />
