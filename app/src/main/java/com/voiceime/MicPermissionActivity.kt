@@ -24,6 +24,7 @@ class MicPermissionActivity : Activity() {
         ) {
             setResult(RESULT_OK)
             FloatingMicAccessibilityService.onMicPermissionResult(granted = true)
+            VoiceImeService.onMicPermissionResult(granted = true)
             finish()
             return
         }
@@ -45,6 +46,7 @@ class MicPermissionActivity : Activity() {
                 grantResults[0] == PackageManager.PERMISSION_GRANTED
             setResult(if (granted) RESULT_OK else RESULT_CANCELED)
             FloatingMicAccessibilityService.onMicPermissionResult(granted)
+            VoiceImeService.onMicPermissionResult(granted)
         }
         finish()
     }

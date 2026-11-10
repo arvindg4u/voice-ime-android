@@ -92,6 +92,19 @@ class VoiceImeService : InputMethodService() {
                 append(remainder)
             }
         }
+
+        /** Live IME instance, so [MicPermissionActivity] can deliver its result. */
+        @Volatile
+        private var connectedInstance: VoiceImeService? = null
+
+        /**
+         * Called by [MicPermissionActivity] when the runtime permission request
+         * settles. The IME cannot request permissions itself, so the result
+         * arrives here and is forwarded to the live instance.
+         */
+        fun onMicPermissionResult(granted: Boolean) {
+            connectedInstance?.onPermissionResult(granted)
+        }
     }
 
     private var rootView: View? = null
@@ -139,7 +152,7 @@ class VoiceImeService : InputMethodService() {
     private var passwordArmed = false
     private var passwordField = false
     private var keyCursor: Int = 0
-    /** Set when mic was tapped without permission; cleared on resume or new tap. */
+    /** Set when a mic tap opened the permission request; cleared by its result. */
     private var pendingMicResume = false
     /** Manual-retry backoff: 0→immediate, then 2s, 4s, capped at 8s. Reset on success. */
     private var retryBackoffMs: Long = 0L
@@ -150,6 +163,7 @@ class VoiceImeService : InputMethodService() {
     override fun onCreate() {
         super.onCreate()
         settings = SettingsStore(this)
+        connectedInstance = this
     }
 
     override fun onCreateInputView(): View {
@@ -284,12 +298,10 @@ class VoiceImeService : InputMethodService() {
     override fun onWindowShown() {
         super.onWindowShown()
         registerClipListener()
-        // Permission screen (NEW_TASK activity) covers the IME; when it
-        // returns, the window shows again — resume the pending mic tap.
-        if (pendingMicResume && state == State.IDLE) {
-            pendingMicResume = false
-            onMicTapped()
-        }
+        // The pending mic tap is resumed by MicPermissionActivity's explicit
+        // result callback (see onPermissionResult), never from this hook: the
+        // permission activity is translucent so this may never fire, and
+        // keying on it re-entered onMicTapped on denial (an activity loop).
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -312,6 +324,7 @@ class VoiceImeService : InputMethodService() {
         cancelWork()
         serviceScope.cancel()
         mainHandler.removeCallbacksAndMessages(null)
+        if (connectedInstance === this) connectedInstance = null
         super.onDestroy()
     }
 
@@ -353,8 +366,8 @@ class VoiceImeService : InputMethodService() {
             val intent = Intent(this, MicPermissionActivity::class.java)
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             startActivity(intent)
-            // Auto-resume: when the permission screen returns and the grant
-            // is in place, start recording without a second mic tap.
+            // Resumed by onPermissionResult(granted = true). A denial reports
+            // and stops instead of re-arming, so the request cannot loop.
             pendingMicResume = true
             return
         }
@@ -365,6 +378,28 @@ class VoiceImeService : InputMethodService() {
         }
         startRecording()
         if (state == State.RECORDING) hapticTap()
+    }
+
+    /**
+     * Runtime-permission result for the request this service opened. Only a
+     * granted result on a pending tap resumes recording; a denial reports and
+     * stops. Re-entering onMicTapped() on denial is what looped before, because
+     * Android auto-denies a repeat request without showing a dialog.
+     */
+    private fun onPermissionResult(granted: Boolean) {
+        when (MicPermissionPolicy.outcome(pendingMicResume, granted)) {
+            MicPermissionPolicy.Outcome.IGNORE -> Unit
+            MicPermissionPolicy.Outcome.RESUME -> {
+                pendingMicResume = false
+                // Deferred one main-loop turn so the finishing permission
+                // activity cannot hide the IME mid-capture.
+                mainHandler.post { if (state == State.IDLE) onMicTapped() }
+            }
+            MicPermissionPolicy.Outcome.DENIED -> {
+                pendingMicResume = false
+                showError(getString(R.string.ime_mic_permission_denied))
+            }
+        }
     }
 
     private fun onEnterTapped() {
