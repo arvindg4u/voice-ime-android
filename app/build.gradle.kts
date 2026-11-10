@@ -65,6 +65,16 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // DEPRECATED UPSTREAM, DELIBERATELY FROZEN. EncryptedSharedPreferences,
+    // EncryptedFile and MasterKey were all deprecated in security-crypto 1.1.0
+    // (stable 2025-07); Google ships no drop-in replacement and no migration
+    // guide, splitting the artifact into Security-State /
+    // Security-App-Authenticator / Security-Identity-Credential and steering new
+    // work to direct Tink + Android Keystore use. It still works and carries
+    // real security weight here (SettingsStore holds the API keys;
+    // EncryptedFileHistoryCrypto seals clipboard history), so treat this pin as
+    // load-bearing: do not bump, trim, or "modernise" it piecemeal. Any change
+    // needs its own migration decision and a crypto test pass.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     // Direct pin of the exact tink-android version security-crypto:1.1.0-alpha06
     // already resolves (runtime scope there, so not on our compile classpath).

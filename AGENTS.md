@@ -81,6 +81,12 @@ an environment failure as a code failure.
   cleartext is blocked (`cleartextTrafficPermitted=false`). Do **not** add
   permissions, persist audio to disk, store keys unencrypted, or log keys /
   transcripts — diagnostics are gated behind `BuildConfig.DEBUG`.
+- The crypto dependency is frozen on purpose: `androidx.security:security-crypto`
+  is pinned at `1.1.0-alpha06` even though `EncryptedSharedPreferences`,
+  `EncryptedFile` and `MasterKey` were deprecated upstream in 1.1.0 (stable
+  2025-07) with no replacement or migration guide. It still works and protects
+  the API keys and clipboard history. Don't bump it or swap it out without a
+  deliberate migration — see the comment in `app/build.gradle.kts`.
 - Release flow: a `v*` tag runs `release.yml`, which fails unless the tag equals
   `versionName` in `app/build.gradle.kts` (currently `1.6.3`, `versionCode` 16).
   Bump both there.
