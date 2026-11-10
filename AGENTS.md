@@ -42,7 +42,7 @@ an environment failure as a code failure.
   Use MockK/Mockito only to isolate network or hardware; `MockWebServer` for
   `LlmClient`. `unitTests.isReturnDefaultValues` and `isIncludeAndroidResources`
   are already enabled.
-- Baseline: ~168 `@Test` methods across 14 files (`LlmClientTest` is the
+- Baseline: ~174 `@Test` methods across 15 files (`LlmClientTest` is the
   largest, ~60). `WaveformView` is intentionally not unit-tested — its math
   lives in `ImeLayoutPolicy`.
 

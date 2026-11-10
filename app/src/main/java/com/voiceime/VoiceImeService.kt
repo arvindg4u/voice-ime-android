@@ -667,23 +667,18 @@ class VoiceImeService : InputMethodService() {
     }
 
     /**
-     * Assembles the commit text: finalized parts, else last interim,
-     * else the status preview (never a "Transcribing…"/"Recording…"
-     * status string). Empty when nothing usable arrived.
+     * Assembles the commit text from live callbacks only: finalized parts,
+     * else the last interim hypothesis. Never reads [statusText]: that view
+     * can already hold an error/status label by the time finalization settles,
+     * and typing it into the editor as dictated speech is exactly the bug this
+     * seam closes. Empty when no transcript text arrived, or when the stop
+     * flow no longer owns the commit (an error or cancel took over).
      */
-    private fun resolveLiveText(): String {
-        val interim = liveLastInterim.trim()
-        return liveFinalParts.toString().trim()
-            .ifEmpty { interim }
-            .ifEmpty {
-                val shown = statusText?.text?.toString().orEmpty().trim()
-                // The status view otherwise still holds "Transcribing…" —
-                // never commit a status string as a transcript.
-                if (shown == getString(R.string.ime_status_uploading) ||
-                    shown == getString(R.string.ime_status_recording)
-                ) "" else shown
-            }
-    }
+    private fun resolveLiveText(): String = LiveCommitPolicy.resolveCommitText(
+        finalText = liveFinalParts.toString(),
+        interimText = liveLastInterim,
+        stillUploading = state == State.UPLOADING,
+    )
 
     /** Stops the recorder and reports the captured peak. Only suspension in
      * the commit prologue is the recorder join inside; the session was
@@ -742,7 +737,11 @@ class VoiceImeService : InputMethodService() {
             awaitLiveFinal(session, liveStopReason)
             val text = resolveLiveText()
             if (text.isEmpty()) {
-                showError(getString(R.string.ime_error_empty))
+                // A failure that surfaced during finalization already owns the
+                // view (and may explain the empty text); don't overwrite it
+                // with a generic message. resolveLiveText() returned "" for
+                // that case, so nothing was committed either.
+                if (state == State.UPLOADING) showError(getString(R.string.ime_error_empty))
             } else {
                 val usedKeys = normalizeKeys(settings.apiKeys)
                 if (usedKeys.isNotEmpty()) {
