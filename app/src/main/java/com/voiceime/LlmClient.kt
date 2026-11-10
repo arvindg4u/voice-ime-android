@@ -719,19 +719,26 @@ class LlmClient {
         val lastTranscriptMs = AtomicLong(0L)
         val raw = buildLiveAttemptSocket(host, baseUrl, key, deferred, transcript, lastTranscriptMs)
         inFlightRaw = raw
-        connectLiveSocket(raw)?.let { return@coroutineScope it }
+        // Everything after the aliases are published runs inside the try so
+        // the finally below always unpublishes them. An early return from a
+        // failed connect (or a cancellation thrown out of connect/send) must
+        // not leave inFlightRaw/liveResult pointing at a dead socket and an
+        // incomplete deferred for a later cancel() to poke. A non-local
+        // return@coroutineScope skips the statements after it, but a finally
+        // still runs, so the connect check belongs inside the try.
         try {
+            connectLiveSocket(raw)?.let { return@coroutineScope it }
             // Chunk loop (per-chunk Base64 + JSON) on IO, never Main.
-            withContext(Dispatchers.IO) {
-                sendLiveAudio(raw, pcm, model, smartMode, deferred)
+            try {
+                withContext(Dispatchers.IO) {
+                    sendLiveAudio(raw, pcm, model, smartMode, deferred)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                deferred.complete(LiveOutcome.Fail("Network error — check connection", e))
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            deferred.complete(LiveOutcome.Fail("Network error — check connection", e))
-        }
-        try {
-            awaitLiveOutcome(raw, deferred, transcript, lastTranscriptMs)
+            return@coroutineScope awaitLiveOutcome(raw, deferred, transcript, lastTranscriptMs)
         } finally {
             if (inFlightRaw === raw) inFlightRaw = null
             if (liveResult === deferred) liveResult = null
