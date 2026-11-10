@@ -760,8 +760,14 @@ class FloatingMicAccessibilityService : AccessibilityService() {
 
     private fun startDictation() {
         if (!hasAnyActiveTarget() && !refreshEditorTargetBeforeAction()) {
+            // The bubble is its own window, but removeOverlay() tears it down
+            // too, so drop the overlay only once the message has had its
+            // moment - and only if no editor appeared in the meantime.
             showFeedback("Place the cursor in a text field")
-            removeOverlay()
+            mainHandler.postDelayed(
+                Runnable { if (!hasAnyActiveTarget()) removeOverlay() },
+                FEEDBACK_DURATION_MS,
+            )
             return
         }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=

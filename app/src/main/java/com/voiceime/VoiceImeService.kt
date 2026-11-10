@@ -11,7 +11,6 @@ import android.inputmethodservice.InputMethodService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.PersistableBundle
 import android.util.Log
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -1380,17 +1379,6 @@ class VoiceImeService : InputMethodService() {
             extras.containsKey(ClipboardPolicy.EXTRA_IS_SENSITIVE)
         } catch (e: Exception) {
             false
-        }
-    }
-
-    private fun markClipSensitive(desc: ClipDescription) {
-        if (Build.VERSION.SDK_INT < 33) return
-        try {
-            val extras = desc.extras ?: PersistableBundle()
-            extras.putBoolean(ClipboardPolicy.EXTRA_IS_SENSITIVE, true)
-            desc.extras = extras
-        } catch (e: Exception) {
-            // Sensitive flag is best-effort on older platforms.
         }
     }
 

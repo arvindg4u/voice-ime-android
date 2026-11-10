@@ -74,8 +74,11 @@ class FloatingMicView(context: Context) : View(context) {
             State.TRANSCRIBING -> Color.rgb(107, 107, 107)
             State.ERROR -> Color.rgb(183, 68, 50)
         }
+        // Light hairline on every fill. The idle border used to be a magenta
+        // placeholder, which clashed with the other states and with the
+        // documented dark-slate idle look.
         borderPaint.color = when (state) {
-            State.IDLE -> Color.rgb(255, 0, 255)
+            State.IDLE -> Color.rgb(206, 210, 216)
             State.RECORDING -> Color.rgb(255, 220, 220)
             State.TRANSCRIBING -> Color.rgb(232, 234, 237)
             State.ERROR -> Color.rgb(255, 210, 180)

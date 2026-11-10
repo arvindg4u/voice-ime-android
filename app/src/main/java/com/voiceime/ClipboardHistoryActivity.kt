@@ -155,7 +155,10 @@ class ClipboardHistoryActivity : AppCompatActivity() {
     private fun commitEntry(entry: ClipboardEntry) {
         try {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("voice-ime", entry.text))
+            val clip = ClipData.newPlainText("voice-ime", entry.text)
+            // Re-copying must not lose the flag the IME set on capture.
+            if (entry.isSensitive) markClipSensitive(clip.description)
+            cm.setPrimaryClip(clip)
         } catch (e: Exception) {
             // Clipboard unavailable; nothing to commit.
             return
