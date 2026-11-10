@@ -63,23 +63,12 @@ object FloatingMicPolicy {
     )
 
     /**
-     * Detects every Android password InputType variation, including "visible
-     * password" (after toggling a show-password eye icon, where
-     * AccessibilityNodeInfo.isPassword often flips to false).
+     * Delegates to [PasswordFieldPolicy], the single source of truth. The IME,
+     * the clipboard gate and this overlay must agree on what is a password
+     * field, so do not re-implement the check here.
      */
-    fun isPasswordInputType(inputType: Int): Boolean {
-        val cls = inputType and InputType.TYPE_MASK_CLASS
-        val variation = inputType and InputType.TYPE_MASK_VARIATION
-        return when (cls) {
-            InputType.TYPE_CLASS_TEXT ->
-                variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-                    variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-                    variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
-            InputType.TYPE_CLASS_NUMBER ->
-                variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
-            else -> false
-        }
-    }
+    fun isPasswordInputType(inputType: Int): Boolean =
+        PasswordFieldPolicy.isPasswordInputType(inputType)
 
     /** True when [inputType] declares a real non-password text/number/date editor. */
     fun hasEditableInputType(inputType: Int): Boolean {

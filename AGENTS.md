@@ -52,7 +52,10 @@ an environment failure as a code failure.
   `LlmClient`: `VoiceImeService` (the `InputMethodService` keyboard) and the
   optional `FloatingMicAccessibilityService` (draggable AccessibilityService
   overlay). Only the floating service needs Accessibility; it must reject
-  password fields and its own package before retaining a target.
+  password fields and its own package before retaining a target. Password-field
+  detection is `PasswordFieldPolicy` — one implementation, delegated to by the
+  IME, the clipboard gate and the overlay — so never re-implement the variation
+  checks in a caller.
 - Transport selection is a model-name heuristic in `GeminiTransports.kt`:
   `isLiveModel` (names containing `-live` / `live-preview`) → `BidiGenerateContent`
   WebSocket via `LiveSocket`; the Interactions allowlist → `/interactions`;

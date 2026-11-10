@@ -50,19 +50,19 @@ class ClipboardPolicyTest {
     }
 
     @Test
-    fun `isPasswordInputType covers all four variations`() {
+    fun `PasswordFieldPolicy covers all four variations`() {
         val textPw = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         val textVisible = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
         val textWeb = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD
         val numPw = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_VARIATION_PASSWORD
-        assertTrue(ClipboardPolicy.isPasswordInputType(textPw))
-        assertTrue(ClipboardPolicy.isPasswordInputType(textVisible))
-        assertTrue(ClipboardPolicy.isPasswordInputType(textWeb))
-        assertTrue(ClipboardPolicy.isPasswordInputType(numPw))
-        assertFalse(ClipboardPolicy.isPasswordInputType(InputType.TYPE_CLASS_TEXT))
-        assertFalse(ClipboardPolicy.isPasswordInputType(InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS))
-        assertFalse(ClipboardPolicy.isPasswordInputType(InputType.TYPE_CLASS_NUMBER))
-        assertFalse(ClipboardPolicy.isPasswordInputType(InputType.TYPE_CLASS_PHONE))
+        assertTrue(PasswordFieldPolicy.isPasswordInputType(textPw))
+        assertTrue(PasswordFieldPolicy.isPasswordInputType(textVisible))
+        assertTrue(PasswordFieldPolicy.isPasswordInputType(textWeb))
+        assertTrue(PasswordFieldPolicy.isPasswordInputType(numPw))
+        assertFalse(PasswordFieldPolicy.isPasswordInputType(InputType.TYPE_CLASS_TEXT))
+        assertFalse(PasswordFieldPolicy.isPasswordInputType(InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS))
+        assertFalse(PasswordFieldPolicy.isPasswordInputType(InputType.TYPE_CLASS_NUMBER))
+        assertFalse(PasswordFieldPolicy.isPasswordInputType(InputType.TYPE_CLASS_PHONE))
     }
 
     @Test

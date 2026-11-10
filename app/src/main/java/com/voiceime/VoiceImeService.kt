@@ -12,7 +12,6 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PersistableBundle
-import android.text.InputType
 import android.util.Log
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -1475,13 +1474,10 @@ class VoiceImeService : InputMethodService() {
         clipPopup = null
     }
 
-    private fun isPasswordField(info: EditorInfo?): Boolean {        if (info == null) return false
-        val cls = info.inputType and InputType.TYPE_MASK_CLASS
-        if (cls != InputType.TYPE_CLASS_TEXT && cls != InputType.TYPE_CLASS_NUMBER) return false
-        val variation = info.inputType and InputType.TYPE_MASK_VARIATION
-        return variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD ||
-            variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
-            variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
-    }
+    /**
+     * Delegates to [PasswordFieldPolicy] so the IME agrees with the clipboard
+     * gate and the floating overlay on what counts as a password field.
+     */
+    private fun isPasswordField(info: EditorInfo?): Boolean =
+        info != null && PasswordFieldPolicy.isPasswordInputType(info.inputType)
 }
