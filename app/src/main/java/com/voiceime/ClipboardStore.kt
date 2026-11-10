@@ -2,7 +2,6 @@ package com.voiceime
 
 import android.content.Context
 import java.io.File
-import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -21,8 +20,8 @@ import org.json.JSONObject
  * from scratch.
  *
  * All IO runs on the caller's thread; callers must use Dispatchers.IO. The
- * in-memory snapshot is a CopyOnWriteArrayList so UI threads read without
- * blocking.
+ * in-memory snapshot is published as an immutable list value, so UI threads
+ * read it with no lock and never block on this class's file I/O.
  *
  * Payloads are sealed through [HistoryCrypto] before hitting disk:
  * [forContext] wires the [EncryptedFile]-backed impl (AES256-GCM); the
@@ -63,7 +62,17 @@ class ClipboardStore private constructor(
     private val backup = File(dir, "$FILE_NAME.bak")
     private val swap = File(dir, "$FILE_NAME.tmp")
 
-    private val entries = CopyOnWriteArrayList<ClipboardEntry>()
+    /**
+     * Published snapshot, newest first. Never mutated in place: every writer
+     * builds a new list and swaps this reference under [STORE_LOCK]. The swap
+     * is a single write to a [Volatile] field, so [snapshot] can read it with
+     * no lock and still never observe a torn state - a list cleared before the
+     * refill, or a half-applied delete - which a bare clear()+addAll() pair
+     * would expose to a lock-free reader. The read-only [List] type makes an
+     * accidental in-place mutation a compile error.
+     */
+    @Volatile
+    private var entries: List<ClipboardEntry> = emptyList()
 
     var maxUnpinned: Int = ClipboardPolicy.DEFAULT_MAX_UNPINNED
         set(value) {
@@ -76,15 +85,18 @@ class ClipboardStore private constructor(
     var ttlMs: Long = ClipboardPolicy.DEFAULT_TTL_MS
     var enabled: Boolean = false
 
-    /** Immutable copy of the current in-memory snapshot (newest first). */
-    fun snapshot(): List<ClipboardEntry> = synchronized(STORE_LOCK) { entries.toList() }
+    /**
+     * Current snapshot (newest first). Lock-free: it reads the published list
+     * reference, which writers only ever replace, so a caller on the UI thread
+     * never blocks on [persist]'s file I/O.
+     */
+    fun snapshot(): List<ClipboardEntry> = entries
 
     /** Loads primary (falls back to .bak), prunes, and refreshes the snapshot. */
     fun load(nowMs: Long = System.currentTimeMillis()): List<ClipboardEntry> = synchronized(STORE_LOCK) {
         val loaded = readFile() ?: emptyList()
         val pruned = ClipboardPolicy.prune(loaded, nowMs, maxUnpinned, maxPinned, ttlMs)
-        entries.clear()
-        entries.addAll(pruned)
+        entries = pruned
         // Read-now-writes is intentional: when prune dropped entries the file
         // on disk still holds the unpruned payload, so persist the pruned
         // snapshot to bound file growth.
@@ -96,10 +108,9 @@ class ClipboardStore private constructor(
         if (!enabled) return@synchronized snapshot()
         if (!ClipboardPolicy.shouldCapture(text)) return@synchronized snapshot()
         val updated = ClipboardPolicy.addClip(
-            entries.toList(), text, nowMs, maxUnpinned, maxPinned, ttlMs, isSensitive,
+            entries, text, nowMs, maxUnpinned, maxPinned, ttlMs, isSensitive,
         )
-        entries.clear()
-        entries.addAll(updated)
+        entries = updated
         persist()
         return@synchronized snapshot()
     }
@@ -107,7 +118,7 @@ class ClipboardStore private constructor(
     fun togglePin(entryId: String, nowMs: Long = System.currentTimeMillis()): List<ClipboardEntry> = synchronized(STORE_LOCK) {
         val target = entries.find { it.id == entryId } ?: return@synchronized snapshot()
         val updated = if (target.isPinned) {
-            ClipboardPolicy.unpin(entries.toList(), entryId, nowMs)
+            ClipboardPolicy.unpin(entries, entryId, nowMs)
         } else {
             val pinnedCount = entries.count { it.isPinned }
             val withPin = entries.map { entry ->
@@ -122,26 +133,35 @@ class ClipboardStore private constructor(
                 withPin
             }
         }
-        entries.clear()
-        entries.addAll(updated)
+        entries = updated
         persist()
         return@synchronized snapshot()
     }
 
     fun deleteAt(entryId: String): List<ClipboardEntry> = synchronized(STORE_LOCK) {
-        if (entries.removeIf { it.id == entryId }) persist()
+        val before = entries
+        val updated = before.filterNot { it.id == entryId }
+        if (updated.size != before.size) {
+            entries = updated
+            persist()
+        }
         return@synchronized snapshot()
     }
 
     /** Removes every unpinned entry; returns the surviving snapshot. */
     fun clearUnpinned(): List<ClipboardEntry> = synchronized(STORE_LOCK) {
-        if (entries.removeIf { !it.isPinned }) persist()
+        val before = entries
+        val updated = before.filter { it.isPinned }
+        if (updated.size != before.size) {
+            entries = updated
+            persist()
+        }
         return@synchronized snapshot()
     }
 
     /** Removes everything and deletes the store files. */
     fun clearAll() = synchronized(STORE_LOCK) {
-        entries.clear()
+        entries = emptyList()
         deleteFiles()
     }
 
@@ -149,7 +169,7 @@ class ClipboardStore private constructor(
     fun setEnabled(value: Boolean, nowMs: Long = System.currentTimeMillis()) = synchronized(STORE_LOCK) {
         enabled = value
         if (!value) {
-            entries.clear()
+            entries = emptyList()
             deleteFiles()
         } else {
             load(nowMs)

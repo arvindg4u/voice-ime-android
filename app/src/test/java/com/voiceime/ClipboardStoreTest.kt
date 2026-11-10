@@ -265,4 +265,32 @@ class ClipboardStoreTest {
         stop.set(true); writer.join(30_000); readers.forEach { it.join(30_000) }
         assertEquals(0, empties.get())
     }
+
+    @Test
+    fun `snapshot never observes a half-applied delete`() {
+        val s = store()
+        s.add("seed", nowMs = 1_000L)
+        val torn = java.util.concurrent.atomic.AtomicInteger(0)
+        val stop = java.util.concurrent.atomic.AtomicBoolean(false)
+        val writer = Thread {
+            var n = 0
+            while (!stop.get()) {
+                // Keep at least one entry, so an empty read can only mean a
+                // reader saw a delete before the store published the result.
+                val current = s.snapshot()
+                if (current.size > 1) s.deleteAt(current.first().id)
+                s.add("w${n++}", nowMs = 2_000L + n)
+                if (n > 200) n = 0
+            }
+        }
+        val readers = (0 until 3).map {
+            Thread {
+                while (!stop.get()) { if (s.snapshot().isEmpty()) torn.incrementAndGet() }
+            }
+        }
+        writer.start(); readers.forEach { it.start() }
+        Thread.sleep(2_000)
+        stop.set(true); writer.join(30_000); readers.forEach { it.join(30_000) }
+        assertEquals(0, torn.get())
+    }
 }
