@@ -9,6 +9,7 @@ import java.net.Socket
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.locks.ReentrantLock
 import javax.net.ssl.SSLSocketFactory
 
 /**
@@ -36,6 +37,12 @@ internal class LiveSocket(
     private val log: (String, String) -> Unit,
 ) {
     private val sendQueue = LinkedBlockingQueue<ByteArray>()
+    /**
+     * Serializes frame writes. Three writers share the socket: the writer
+     * thread, the reader thread (pong replies), and close() on whichever thread
+     * asked to tear down. Interleaving them mid-frame corrupts the wire.
+     */
+    private val writeLock = ReentrantLock()
     @Volatile private var socket: Socket? = null
     @Volatile private var out: OutputStream? = null
     @Volatile private var terminal = false
@@ -145,19 +152,27 @@ internal class LiveSocket(
     fun close(code: Int = 1000, reason: String = "") {
         if (terminal) return
         terminal = true
-        try {
-            sendQueue.clear()
-            out?.let { writeFrame(it, 0x8, closePayload(code, reason)) }
-        } catch (_: Exception) {
-            // Best effort; the socket close below is what matters.
-        } finally {
-            closeSocket()
-            interruptThreads()
+        sendQueue.clear()
+        // Serialized with the writer, but never blocking: close() runs on
+        // arbitrary threads (including the service's main thread), so never
+        // wait behind a writer that may be wedged in a socket write. If the
+        // lock is held the courtesy close frame is skipped and the socket is
+        // torn down regardless - the teardown is what matters, not the goodbye.
+        if (writeLock.tryLock()) {
             try {
-                onClosed(code, reason)
+                out?.let { writeFrame(it, 0x8, closePayload(code, reason)) }
             } catch (_: Exception) {
-                // Listener must never throw into us.
+                // Best effort; the socket close below is what matters.
+            } finally {
+                writeLock.unlock()
             }
+        }
+        closeSocket()
+        interruptThreads()
+        try {
+            onClosed(code, reason)
+        } catch (_: Exception) {
+            // Listener must never throw into us.
         }
     }
 
@@ -177,10 +192,18 @@ internal class LiveSocket(
         try {
             while (!terminal) {
                 val frame = sendQueue.take()
-                val stream = out ?: return
                 try {
-                    stream.write(frame)
-                    stream.flush()
+                    writeLock.lock()
+                    try {
+                        // Dropped once torn down, so no frame lands after the
+                        // close frame that close() may be writing.
+                        if (terminal) return
+                        val stream = out ?: return
+                        stream.write(frame)
+                        stream.flush()
+                    } finally {
+                        writeLock.unlock()
+                    }
                 } catch (e: Exception) {
                     if (!terminal) fail(LiveSocketException("Network error — check connection", e))
                     return
@@ -208,7 +231,12 @@ internal class LiveSocket(
     private fun answerPing(message: WsMessage) {
         // Ping: answer with pong carrying the same payload.
         try {
-            out?.let { writeFrame(it, 0xA, message.payload) }
+            writeLock.lock()
+            try {
+                if (!terminal) out?.let { writeFrame(it, 0xA, message.payload) }
+            } finally {
+                writeLock.unlock()
+            }
         } catch (_: Exception) {
             // Pong is best-effort.
         }
@@ -242,13 +270,19 @@ internal class LiveSocket(
                 // 0xA pong and reserved opcodes: ignore.
             }
         } catch (e: EOFException) {
+            // The peer went away without a WebSocket close frame, or the stream
+            // was truncated mid-frame. Reported through onClosed deliberately:
+            // the session layers commit whatever transcript already arrived
+            // rather than discard a take over a transport blip, and the one-shot
+            // path makes the same call on timeout. A protocol-level failure
+            // still routes through fail() below.
             finishQuietly(normalClose = true)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
         } catch (e: Exception) {
             if (!terminal) {
                 // A bare socket error here usually means the server went
-                // away mid-turn; surface it so the owner can commit fallback.
+                // away mid-turn; surface it as a failure for the owner.
                 fail(LiveSocketException("Network error — check connection", e))
             }
         }

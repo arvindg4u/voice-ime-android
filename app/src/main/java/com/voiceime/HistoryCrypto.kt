@@ -117,6 +117,10 @@ class EncryptedFileHistoryCrypto(
                 EncryptedFile.FileEncryptionScheme.AES256_GCM_HKDF_4KB,
             ).build()
             object : CryptoFileSealer {
+                // `file` is ignored on purpose: EncryptedFile binds its auth
+                // tag to the name it was built with (see the class doc), so
+                // this impl must always go through the fixed scratch file. The
+                // parameter is here for SoftwareTinkSealer, which needs the name.
                 override fun sealTo(plain: ByteArray, file: File) {
                     encryptedFile.openFileOutput().use { out -> out.write(plain) }
                 }
@@ -135,10 +139,13 @@ class EncryptedFileHistoryCrypto(
     override fun seal(plain: ByteArray): ByteArray {
         synchronized(CRYPTO_LOCK) {
             if (scratch.exists()) scratch.delete()
-            sealer.sealTo(plain, scratch)
             try {
+                sealer.sealTo(plain, scratch)
                 return scratch.readBytes()
             } finally {
+                // Always clear the scratch, covering the seal throw too: that
+                // is exactly the path ClipboardStore.persist is built to
+                // survive and retry, so residue would pile up per failure.
                 scratch.delete()
             }
         }
@@ -147,8 +154,8 @@ class EncryptedFileHistoryCrypto(
     override fun open(sealed: ByteArray): ByteArray {
         synchronized(CRYPTO_LOCK) {
             if (scratch.exists()) scratch.delete()
-            scratch.writeBytes(sealed)
             try {
+                scratch.writeBytes(sealed)
                 return sealer.openFrom(scratch)
             } finally {
                 scratch.delete()

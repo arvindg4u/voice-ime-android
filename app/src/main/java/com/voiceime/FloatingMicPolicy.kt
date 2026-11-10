@@ -218,6 +218,10 @@ object FloatingMicPolicy {
      * hypothesis for a live preview. Interims can be either the whole running
      * hypothesis or only the next segment, so remove containment and the
      * longest suffix/prefix overlap before joining them.
+     *
+     * Known limitation: the same text-only overlap as [FinalAccumulator], so a
+     * word repeated across the final/interim boundary can collapse in the
+     * preview bubble.
      */
     fun mergeLivePreview(finalText: String, interimText: String): String {
         val final = finalText.trim()

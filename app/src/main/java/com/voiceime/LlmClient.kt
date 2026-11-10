@@ -95,6 +95,11 @@ class LlmClient {
             return interactionsTranscribe(wav, keys, baseUrl, model, startIndex, customPrompt, smartMode)
         }
         // CPU on IO: multi-MB Base64 + JSON for long takes must not run on Main.
+        // Heap note: WAV, its base64 and the JSON string are all live at once,
+        // so a full 10-minute take peaks near 70 MB here. Live streaming is the
+        // default partly for this reason; if a batch model ever OOMs on a
+        // low-heap device, stream the base64 into the request body with
+        // Base64.getEncoder().wrap(...) instead of building a String.
         val (audioB64, body) = withContext(Dispatchers.IO) {
             val b64 = java.util.Base64.getEncoder().encodeToString(wav)
             b64 to buildGeminiRequestJson(b64, customPrompt)
@@ -674,6 +679,8 @@ class LlmClient {
         smartMode: Boolean = false,
     ): Pair<String, Int> {
         // CPU on IO: multi-MB Base64 + JSON for long takes must not run on Main.
+        // Same peak-heap ceiling as the generateContent path above, and the same
+        // streaming-base64 fix if it ever bites.
         val (audioB64, body) = withContext(Dispatchers.IO) {
             val b64 = java.util.Base64.getEncoder().encodeToString(wav)
             b64 to buildInteractionsRequestJson(b64, model, customPrompt, smartMode)

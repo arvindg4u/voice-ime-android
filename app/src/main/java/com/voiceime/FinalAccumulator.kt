@@ -8,6 +8,12 @@ package com.voiceime
  * caller skips onFinal but still completes its signal). Pure,
  * framework-free, JVM-testable.
  *
+ * Known limitation: matching is text-only, so a word genuinely repeated across
+ * a boundary is absorbed - current "hello" plus incoming "hello again" yields
+ * "hello again" rather than "hello hello again". A cumulative resend is far
+ * more common than a repeated boundary word, so the trade favours not
+ * duplicating; it does mean this can silently drop a repeated word.
+ *
  * Not thread-safe; call only from the socket-callback thread. Appends are
  * O(n^2) worst-case (suffix scan per append) — fine for short transcripts.
  */
